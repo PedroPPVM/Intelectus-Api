@@ -4,6 +4,7 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
+# Código para realizar web scrapping
 
 BASE_URL = 'https://revistas.inpi.gov.br/rpi/'
 SAVE_DIR = 'downloads'
