@@ -125,15 +125,24 @@ class ProcessService:
         summary_data = []
         
         for process in processes:
-            summary = ProcessSummary.model_validate(process)
-            
-            # Lógica de display_title centralizada
+            # Lógica de display_title centralizada (ANTES da validação)
             if process.short_title:
-                summary.display_title = process.short_title
+                display_title = process.short_title
             elif len(process.title) > 50:
-                summary.display_title = process.title[:50] + "..."
+                display_title = process.title[:50] + "..."
             else:
-                summary.display_title = process.title
+                display_title = process.title
+            
+            # Criar ProcessSummary com todos os campos necessários
+            summary = ProcessSummary(
+                id=process.id,
+                process_number=process.process_number,
+                display_title=display_title,
+                process_type=process.process_type,
+                status=process.status,
+                company_id=process.company_id,
+                created_at=process.created_at
+            )
             
             summary_data.append(summary)
         
