@@ -106,47 +106,43 @@ class ProcessService:
         # Número já em uso por outro processo
         return False
     
-    def transform_to_process_summary(
-        self, 
-        processes: List[Process]
-    ) -> List[ProcessSummary]:
+    def transform_to_process_summary(self, processes: List[Process]) -> List[ProcessSummary]:
         """
-        Transformar lista de processos em ProcessSummary.
+        Transformar lista de Process em ProcessSummary para listagens.
+        Atualizado para o modelo Process remodelado.
         
-        Elimina transformação duplicada em +5 endpoints.
-        Centraliza lógica de display_title.
+        Centraliza lógica de transformação que estava duplicada em vários endpoints.
         
         Args:
             processes: Lista de processos do banco
             
         Returns:
-            List[ProcessSummary]: Lista transformada para resposta
+            List[ProcessSummary]: Lista de processos resumidos
         """
-        summary_data = []
+        summaries = []
         
         for process in processes:
-            # Lógica de display_title centralizada (ANTES da validação)
-            if process.short_title:
-                display_title = process.short_title
-            elif len(process.title) > 50:
-                display_title = process.title[:50] + "..."
-            else:
-                display_title = process.title
+            # Usar title diretamente (não temos mais short_title)
+            display_title = process.title
             
-            # Criar ProcessSummary com todos os campos necessários
+            # Se título muito longo, truncar para exibição
+            if display_title and len(display_title) > 100:
+                display_title = display_title[:97] + "..."
+            
             summary = ProcessSummary(
                 id=process.id,
                 process_number=process.process_number,
-                display_title=display_title,
+                title=display_title or "TÍTULO NÃO INFORMADO",
                 process_type=process.process_type,
                 status=process.status,
+                depositor=process.depositor,
                 company_id=process.company_id,
                 created_at=process.created_at
             )
             
-            summary_data.append(summary)
+            summaries.append(summary)
         
-        return summary_data
+        return summaries
     
     def get_company_processes_with_filters(
         self,
@@ -293,37 +289,25 @@ class ProcessService:
         return updated_process
     
     def validate_process_business_rules(
-        self, 
+        self,
         process_data: ProcessCreate | ProcessUpdate
-    ) -> None:
+    ) -> bool:
         """
-        Validar regras de negócio específicas de processos.
+        Validar regras de negócio dos processos.
+        Atualizado para o modelo Process remodelado.
         
-        Centraliza validações que podem estar espalhadas.
+        Centraliza validações que estavam duplicadas nos endpoints.
         
         Args:
             process_data: Dados do processo para validar
             
+        Returns:
+            bool: True se validações passaram
+            
         Raises:
-            HTTPException: Se alguma regra for violada
+            HTTPException: Se alguma validação falhar
         """
-        # Validação básica de número do processo
-        if hasattr(process_data, 'process_number') and process_data.process_number:
-            process_number = process_data.process_number.strip()
-            
-            if len(process_number) < 3:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Número do processo deve ter pelo menos 3 caracteres"
-                )
-            
-            if len(process_number) > 20:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Número do processo deve ter no máximo 20 caracteres"
-                )
-        
-        # Validação de título
+        # Validação de título obrigatório
         if hasattr(process_data, 'title') and process_data.title:
             title = process_data.title.strip()
             
@@ -332,25 +316,58 @@ class ProcessService:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Título deve ter pelo menos 5 caracteres"
                 )
-        
-        # Validação de short_title se fornecido
-        if hasattr(process_data, 'short_title') and process_data.short_title:
-            short_title = process_data.short_title.strip()
             
-            if len(short_title) > 100:
+            if len(title) > 1000:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Título abreviado deve ter no máximo 100 caracteres"
+                    detail="Título não pode exceder 1000 caracteres"
                 )
         
-        # Validação de datas se fornecidas
-        if hasattr(process_data, 'filing_date') and hasattr(process_data, 'grant_date'):
-            if (process_data.filing_date and process_data.grant_date and
-                process_data.filing_date > process_data.grant_date):
+        # Validação de CNPJ se fornecido
+        if hasattr(process_data, 'cnpj_depositor') and process_data.cnpj_depositor:
+            cnpj = process_data.cnpj_depositor.strip()
+            # Validação básica de CNPJ (14 dígitos)
+            digits_only = ''.join(filter(str.isdigit, cnpj))
+            if len(digits_only) != 14:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="CNPJ deve conter exatamente 14 dígitos"
+                )
+        
+        # Validação de CPF se fornecido
+        if hasattr(process_data, 'cpf_depositor') and process_data.cpf_depositor:
+            cpf = process_data.cpf_depositor.strip()
+            # Validação básica de CPF (11 dígitos)
+            digits_only = ''.join(filter(str.isdigit, cpf))
+            if len(digits_only) != 11:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="CPF deve conter exatamente 11 dígitos"
+                )
+        
+        # Validação de datas lógicas
+        if (hasattr(process_data, 'deposit_date') and hasattr(process_data, 'concession_date') and
+            process_data.deposit_date and process_data.concession_date):
+            if process_data.deposit_date > process_data.concession_date:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Data de depósito não pode ser posterior à data de concessão"
                 )
+        
+        # Validação de depositante obrigatório
+        if (hasattr(process_data, 'depositor') and 
+            hasattr(process_data, 'cnpj_depositor') and 
+            hasattr(process_data, 'cpf_depositor')):
+            
+            if (not process_data.depositor and 
+                not process_data.cnpj_depositor and 
+                not process_data.cpf_depositor):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="É necessário informar pelo menos nome do depositante, CNPJ ou CPF"
+                )
+        
+        return True
     
     def get_process_statistics_summary(
         self,

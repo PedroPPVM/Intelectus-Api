@@ -100,8 +100,9 @@ def get_company_process(
 
 @router.post("/{company_id}/processes/", response_model=ProcessResponse, status_code=status.HTTP_201_CREATED)
 def create_company_process(
+    *,
     company_id: UUID = Path(..., description="ID da empresa"),
-    process_in: ProcessCreate = None,
+    process_in: ProcessCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -114,7 +115,7 @@ def create_company_process(
     - ⚡ **Validação com índice único** ix_process_company_number
     - 📊 **Auditoria completa** de criação
     """
-        # Usar ProcessService com todas as validações
+    # Usar ProcessService com todas as validações
     process = process_service.create_process_with_validation(
         db, process_in, company_id, current_user
     )
@@ -124,9 +125,10 @@ def create_company_process(
 
 @router.put("/{company_id}/processes/{process_id}", response_model=ProcessResponse)
 def update_company_process(
+    *,
     company_id: UUID = Path(..., description="ID da empresa"),
     process_id: UUID = Path(..., description="ID do processo"),
-    process_in: ProcessUpdate = None,
+    process_in: ProcessUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):

@@ -16,29 +16,37 @@ class CRUDProcess:
     def create(self, db: Session, *, obj_in: ProcessCreate) -> Process:
         """
         Criar um novo processo.
+        Atualizado para o modelo Process remodelado.
         """
-        # Criar processo
+        # Criar processo com campos corretos do novo modelo
         db_process = Process(
+            company_id=obj_in.company_id,
+            process_type=obj_in.process_type,
             process_number=obj_in.process_number,
             title=obj_in.title,
-            short_title=obj_in.short_title,
-            description=obj_in.description,
-            process_type=obj_in.process_type,
+            
+            # Depositante/Requerente
+            depositor=obj_in.depositor,
+            cnpj_depositor=obj_in.cnpj_depositor,
+            cpf_depositor=obj_in.cpf_depositor,
+            
+            # Procurador
+            attorney=obj_in.attorney,
+            
+            # Datas importantes
+            deposit_date=obj_in.deposit_date,
+            concession_date=obj_in.concession_date,
+            validity_date=obj_in.validity_date,
+            
+            # Status e situação
             status=obj_in.status,
-            filing_date=obj_in.filing_date,
-            publication_date=obj_in.publication_date,
-            grant_date=obj_in.grant_date,
-            expiry_date=obj_in.expiry_date,
-            applicant_name=obj_in.applicant_name,
-            applicant_document=obj_in.applicant_document,
-            nice_classification=obj_in.nice_classification,
-            ipc_classification=obj_in.ipc_classification,
-            company_id=obj_in.company_id
+            situation=obj_in.situation
         )
         
         db.add(db_process)
         db.commit()
-        db.refresh(db_process)
+        # Note: removed db.refresh() due to enum cache issue
+        # The object already has all needed data after creation
         return db_process
     
     def get(self, db: Session, id: UUID) -> Optional[Process]:
@@ -157,20 +165,6 @@ class CRUDProcess:
         if obj:
             db.delete(obj)
             db.commit()
-        return obj
-    
-    def update_scraped_at(self, db: Session, *, id: UUID) -> Optional[Process]:
-        """
-        Atualizar timestamp de último scraping.
-        """
-        from datetime import datetime
-        
-        obj = db.query(Process).filter(Process.id == id).first()
-        if obj:
-            obj.last_scraped_at = datetime.utcnow()
-            db.add(obj)
-            db.commit()
-            db.refresh(obj)
         return obj
     
     # ===== FUNÇÕES ORIENTADAS A COMPANY (Roadmap Fase 3.1.2) =====
@@ -388,6 +382,22 @@ class CRUDProcess:
             "recent_processes_30_days": recent_count,
             "generated_at": datetime.utcnow().isoformat()
         }
+    
+    def get_by_process_number(self, db: Session, *, process_number: str) -> Optional[Process]:
+        """
+        Buscar processo pelo número (ex: BR512024000001).
+        
+        Args:
+            process_number: Número do processo
+            
+        Returns:
+            Process encontrado ou None se não existir
+        """
+        return (
+            db.query(Process)
+            .filter(Process.process_number == process_number)
+            .first()
+        )
 
 
 # Instância global para uso nos endpoints

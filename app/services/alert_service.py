@@ -242,12 +242,14 @@ class AlertService:
         message_parts = [
             f"Foi encontrado um processo similar ao seu:",
             f"• Número: {match_details.get('process_number', 'N/A')}",
-            f"• Titular: {match_details.get('applicant_name', 'N/A')}",
+            f"• Título: {match_details.get('title', 'N/A')}",
+            f"• Tipo: {match_details.get('process_type', 'N/A')}",
+            f"• Depositante: {match_details.get('depositor', 'N/A')}",
             f"• Status: {match_details.get('status', 'N/A')}",
         ]
         
-        if match_details.get('similarity_score'):
-            message_parts.append(f"• Similaridade: {match_details['similarity_score']}%")
+        if 'similarity_score' in match_details:
+            message_parts.append(f"• Similaridade: {match_details['similarity_score']:.1%}")
         
         alert_data = AlertCreate(
             title=title,

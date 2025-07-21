@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Text, Date, Enum, ForeignKey, DateTime
+from sqlalchemy import Column, String, Date, Enum, ForeignKey, DateTime
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from sqlalchemy.dialects.postgresql import UUID
@@ -10,68 +10,81 @@ from app.db.base_class import Base
 class ProcessType(enum.Enum):
     """
     Tipos de processos de propriedade intelectual.
+    Alinhado com o schema planejado.
     """
-    BRAND = "marca"
-    PATENT = "patente"
-    DESIGN = "desenho_industrial"
-    SOFTWARE = "programa_computador"
-    UTILITY_MODEL = "modelo_utilidade"
-    
+    BRAND = "BRAND"
+    PATENT = "PATENT" 
+    DESIGN = "DESIGN"
+    SOFTWARE = "SOFTWARE"
+
 
 class ProcessStatus(enum.Enum):
     """
-    Status dos processos.
+    Status dos processos - situação legal.
     """
-    PENDING = "pendente"
-    ACTIVE = "ativo"
-    GRANTED = "deferido"
-    DENIED = "indeferido"
-    EXPIRED = "expirado"
-    ABANDONED = "abandonado"
+    PENDING = "PENDING"
+    ACTIVE = "ACTIVE" 
+    GRANTED = "GRANTED"
+    DENIED = "DENIED"
+    EXPIRED = "EXPIRED"
+    ABANDONED = "ABANDONED"
+
+
+class ProcessSituation(enum.Enum):
+    """
+    Situação atual do processo - mais específico que status.
+    """
+    FILED = "FILED"
+    PUBLISHED = "PUBLISHED"  
+    UNDER_EXAMINATION = "UNDER_EXAMINATION"
+    OPPOSED = "OPPOSED"
+    GRANTED = "GRANTED"
+    EXPIRED = "EXPIRED"
+    LAPSED = "LAPSED"
+    RENEWED = "RENEWED"
 
 
 class Process(Base):
     """
     Modelo para processos de propriedade intelectual.
+    Alinhado com o schema planejado e otimizado para scraping.
     """
     __tablename__ = "process"
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
     
-    # Informações básicas do processo
-    process_number = Column(String(20), unique=True, nullable=False, index=True)
-    title = Column(String(500), nullable=False)
-    short_title = Column(String(100), nullable=True)  # Abreviação do título para exibição
-    description = Column(Text, nullable=True)
+    # Relacionamento com empresa
+    company_id = Column(UUID(as_uuid=True), ForeignKey("company.id"), nullable=False)
     
-    # Tipo e status
-    process_type = Column(Enum(ProcessType, values_callable=lambda obj: [e.value for e in obj]), nullable=False)
-    status = Column(Enum(ProcessStatus, values_callable=lambda obj: [e.value for e in obj]), default=ProcessStatus.PENDING)
+    # Identificação do processo
+    process_type = Column(Enum(ProcessType, name="processtype", native_enum=True), nullable=False)
+    process_number = Column(String(50), unique=True, nullable=False, index=True)
+    title = Column(String(1000), nullable=False)
+    
+    # Depositante/Requerente
+    depositor = Column(String(500), nullable=True)  # Nome do depositante
+    cnpj_depositor = Column(String(20), nullable=True)  # CNPJ se pessoa jurídica
+    cpf_depositor = Column(String(15), nullable=True)   # CPF se pessoa física
+    
+    # Procurador/Representante Legal
+    attorney = Column(String(500), nullable=True)
     
     # Datas importantes
-    filing_date = Column(Date, nullable=True)  # Data de depósito
-    publication_date = Column(Date, nullable=True)  # Data de publicação
-    grant_date = Column(Date, nullable=True)  # Data de concessão
-    expiry_date = Column(Date, nullable=True)  # Data de expiração
+    deposit_date = Column(Date, nullable=True)      # Data de depósito
+    concession_date = Column(Date, nullable=True)   # Data de concessão
+    validity_date = Column(Date, nullable=True)     # Data de validade/vigência
     
-    # Informações do titular
-    applicant_name = Column(String(500), nullable=True)  # Nome do depositante/titular
-    applicant_document = Column(String(20), nullable=True)  # CPF/CNPJ do titular
-    
-    # Classificações
-    nice_classification = Column(String(100), nullable=True)  # Para marcas
-    ipc_classification = Column(String(100), nullable=True)  # Para patentes
+    # Status e situação
+    status = Column(Enum(ProcessStatus, name="processstatus", native_enum=True), nullable=False, default=ProcessStatus.PENDING)
+    situation = Column(Enum(ProcessSituation, name="processsituation", native_enum=True), nullable=True)  # Situação mais específica
     
     # Relacionamentos
-    company_id = Column(UUID(as_uuid=True), ForeignKey("company.id"), nullable=False)
     company = relationship("Company", back_populates="processes")
     alerts = relationship("Alert", back_populates="process")
     
-    # Metadados
-    last_scraped_at = Column(DateTime(timezone=True), nullable=True)
+    # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     def __repr__(self):
-        display_title = self.short_title or self.title[:30]
-        return f"<Process(id='{self.id}', number='{self.process_number}', title='{display_title}...')>" 
+        return f"<Process(number='{self.process_number}', type='{self.process_type.value}', depositor='{self.depositor}')>" 
