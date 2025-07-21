@@ -45,8 +45,8 @@ class Process(Base):
     description = Column(Text, nullable=True)
     
     # Tipo e status
-    process_type = Column(Enum(ProcessType), nullable=False)
-    status = Column(Enum(ProcessStatus), default=ProcessStatus.PENDING)
+    process_type = Column(Enum(ProcessType, values_callable=lambda obj: [e.value for e in obj]), nullable=False)
+    status = Column(Enum(ProcessStatus, values_callable=lambda obj: [e.value for e in obj]), default=ProcessStatus.PENDING)
     
     # Datas importantes
     filing_date = Column(Date, nullable=True)  # Data de depósito
