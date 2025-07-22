@@ -1,4 +1,4 @@
-import fitz  # PyMuPDF
+import fitz 
 import re
 
 def search_status_marcas(codigo, filepath):
