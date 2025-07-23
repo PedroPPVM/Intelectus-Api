@@ -4,7 +4,7 @@ from datetime import datetime
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.models.process import Process, ProcessType, ProcessStatus
+from app.models.process import Process, ProcessType
 from app.models.user import User
 from app.schemas.process import ProcessCreate, ProcessUpdate, ProcessSummary
 from app.crud import process as crud_process
@@ -137,7 +137,14 @@ class ProcessService:
                 status=process.status,
                 depositor=process.depositor,
                 company_id=process.company_id,
-                created_at=process.created_at
+                created_at=process.created_at,
+                attorney=process.attorney,
+                cnpj_depositor=process.cnpj_depositor,
+                cpf_depositor=process.cpf_depositor,
+                deposit_date=process.deposit_date,
+                concession_date=process.concession_date,
+                validity_date=process.validity_date,
+                situation=process.situation
             )
             
             summaries.append(summary)

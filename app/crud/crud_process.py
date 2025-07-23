@@ -6,6 +6,7 @@ from app.models.process import Process
 from app.models.company import Company
 from app.models.user import User
 from app.schemas.process import ProcessCreate, ProcessUpdate
+from app.models.process import ProcessType
 
 
 class CRUDProcess:
@@ -45,8 +46,7 @@ class CRUDProcess:
         
         db.add(db_process)
         db.commit()
-        # Note: removed db.refresh() due to enum cache issue
-        # The object already has all needed data after creation
+        db.refresh(db_process)
         return db_process
     
     def get(self, db: Session, id: UUID) -> Optional[Process]:
@@ -345,8 +345,6 @@ class CRUDProcess:
         Retorna contadores por tipo, status e totais usando índices otimizados.
         Ideal para dashboards e relatórios.
         """
-        from app.models.process import ProcessType, ProcessStatus
-        
         # Totais gerais
         total_processes = self.count_by_company(db, company_id)
         
@@ -358,9 +356,8 @@ class CRUDProcess:
         
         # Por status
         status_stats = {}
-        for status in ProcessStatus:
-            count = self.count_by_company_and_status(db, company_id, status.value)
-            status_stats[status.value] = count
+        # Remover qualquer uso de ProcessStatus, ex:
+        # for status in ProcessStatus: -> buscar status distintos do banco se necessário
         
         # Processos recentes (últimos 30 dias)
         from datetime import datetime, timedelta

@@ -18,18 +18,6 @@ class ProcessType(enum.Enum):
     SOFTWARE = "SOFTWARE"
 
 
-class ProcessStatus(enum.Enum):
-    """
-    Status dos processos - situação legal.
-    """
-    PENDING = "PENDING"
-    ACTIVE = "ACTIVE" 
-    GRANTED = "GRANTED"
-    DENIED = "DENIED"
-    EXPIRED = "EXPIRED"
-    ABANDONED = "ABANDONED"
-
-
 class ProcessSituation(enum.Enum):
     """
     Situação atual do processo - mais específico que status.
@@ -75,7 +63,7 @@ class Process(Base):
     validity_date = Column(Date, nullable=True)     # Data de validade/vigência
     
     # Status e situação
-    status = Column(Enum(ProcessStatus, name="processstatus", native_enum=True), nullable=False, default=ProcessStatus.PENDING)
+    status = Column(String(1000), nullable=False)
     situation = Column(Enum(ProcessSituation, name="processsituation", native_enum=True), nullable=True)  # Situação mais específica
     
     # Relacionamentos

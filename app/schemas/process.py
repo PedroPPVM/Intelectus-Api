@@ -16,18 +16,6 @@ class ProcessTypeEnum(str, Enum):
     SOFTWARE = "SOFTWARE"
 
 
-class ProcessStatusEnum(str, Enum):
-    """
-    Status dos processos - situação legal.
-    """
-    PENDING = "PENDING"
-    ACTIVE = "ACTIVE"
-    GRANTED = "GRANTED"
-    DENIED = "DENIED"
-    EXPIRED = "EXPIRED"
-    ABANDONED = "ABANDONED"
-
-
 class ProcessSituationEnum(str, Enum):
     """
     Situação atual do processo - mais específico que status.
@@ -64,7 +52,7 @@ class ProcessBase(BaseModel):
     validity_date: Optional[date] = Field(None, example="2034-01-15")
     
     # Status e situação
-    status: ProcessStatusEnum = Field(default=ProcessStatusEnum.PENDING, example=ProcessStatusEnum.ACTIVE)
+    status: str = Field(default="PENDING", example="ativo")
     situation: Optional[ProcessSituationEnum] = Field(None, example=ProcessSituationEnum.PUBLISHED)
 
 
@@ -88,7 +76,7 @@ class ProcessCreate(ProcessBase):
                 "deposit_date": "2024-01-15",
                 "concession_date": "2024-06-15",
                 "validity_date": "2034-01-15",
-                "status": "ACTIVE",
+                "status": "ativo",
                 "situation": "PUBLISHED"
             }
         }
@@ -108,7 +96,7 @@ class ProcessUpdate(BaseModel):
     deposit_date: Optional[date] = None
     concession_date: Optional[date] = None
     validity_date: Optional[date] = None
-    status: Optional[ProcessStatusEnum] = None
+    status: Optional[str] = None
     situation: Optional[ProcessSituationEnum] = None
 
 
@@ -149,7 +137,7 @@ class ProcessResponse(ProcessBase):
                 "deposit_date": "2024-01-15",
                 "concession_date": None,
                 "validity_date": "2034-01-15",
-                "status": "ACTIVE",
+                "status": "ativo",
                 "situation": "PUBLISHED",
                 "created_at": "2024-01-15T10:30:00Z",
                 "updated_at": "2024-01-20T08:00:00Z"
@@ -168,7 +156,7 @@ class ProcessSummary(BaseModel):
     cnpj_depositor: Optional[str] = Field(None, example="12.345.678/0001-99")
     title: str = Field(..., example="INTELECTUS CONSULTORIA LTDA")
     process_type: ProcessTypeEnum = Field(..., example=ProcessTypeEnum.BRAND)
-    status: ProcessStatusEnum = Field(..., example=ProcessStatusEnum.ACTIVE)
+    status: str = Field(..., example="ativo")
     situation: Optional[ProcessSituationEnum] = Field(None, example=ProcessSituationEnum.PUBLISHED)
     deposit_date: Optional[date] = Field(None, example="2024-01-15")
     concession_date: Optional[date] = Field(None, example="2024-06-15")
@@ -188,7 +176,7 @@ class ProcessSummary(BaseModel):
                 "cnpj_depositor": "12.345.678/0001-99",
                 "title": "INTELECTUS CONSULTORIA LTDA",
                 "process_type": "BRAND",
-                "status": "ACTIVE",
+                "status": "ativo",
                 "depositor": "INTELECTUS CONSULTORIA LTDA",
                 "deposit_date": "2024-01-15",
                 "concession_date": "2024-06-15",

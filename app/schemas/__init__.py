@@ -10,7 +10,7 @@ from app.schemas.company import (
 )
 from app.schemas.process import (
     ProcessBase, ProcessCreate, ProcessUpdate, ProcessInDB, ProcessResponse,
-    ProcessTypeEnum, ProcessStatusEnum, ProcessSummary
+    ProcessTypeEnum, ProcessSummary
 )
 from app.schemas.alert import (
     AlertBase, AlertCreate, AlertUpdate, AlertInDB, AlertResponse, AlertTypeEnum

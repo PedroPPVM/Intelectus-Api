@@ -8,6 +8,7 @@ from app.models.user import User
 from app.schemas.company import CompanyCreate, CompanyUpdate, CompanyResponse
 from app.crud import company as crud_company
 from app.services.access_control_service import access_control_service
+from app.models.process import ProcessType
 
 
 class CompanyService:
@@ -332,7 +333,6 @@ class CompanyService:
         
         # Estatísticas detalhadas de processos (se houver)
         if company.processes:
-            from app.models.process import ProcessType, ProcessStatus
             
             # Por tipo
             type_stats = {}
@@ -342,9 +342,8 @@ class CompanyService:
             
             # Por status
             status_stats = {}
-            for process_status in ProcessStatus:
-                count = len([p for p in company.processes if p.status == process_status])
-                status_stats[process_status.value] = count
+            # Remover qualquer uso de ProcessStatus, ex:
+            # for process_status in ProcessStatus: -> buscar status distintos do banco se necessário
             
             stats["processes_by_type"] = type_stats
             stats["processes_by_status"] = status_stats

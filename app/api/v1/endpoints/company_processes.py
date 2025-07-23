@@ -7,7 +7,7 @@ from app.db.session import get_db
 from app.models.user import User
 from app.schemas.process import (
     ProcessCreate, ProcessUpdate, ProcessResponse, ProcessSummary,
-    ProcessTypeEnum, ProcessStatusEnum
+    ProcessTypeEnum
 )
 from app.security.auth import get_current_user
 from app.services.process_service import process_service
@@ -25,7 +25,7 @@ def list_company_processes(
     skip: int = Query(0, ge=0, description="Registros para pular"),
     limit: int = Query(100, ge=1, le=1000, description="Máximo de registros"),
     process_type: Optional[ProcessTypeEnum] = Query(None, description="Filtrar por tipo"),
-    status_filter: Optional[ProcessStatusEnum] = Query(None, alias="status", description="Filtrar por status"),
+    status_filter: Optional[str] = Query(None, alias="status", description="Filtrar por status"),
     title: Optional[str] = Query(None, description="Buscar no título"),
     order_by: str = Query("created_at", regex="^(created_at|updated_at|title)$", description="Campo para ordenação"),
     order_desc: bool = Query(True, description="Ordenação descendente"),
@@ -53,7 +53,7 @@ def list_company_processes(
         'skip': skip,
         'limit': limit,
         'process_type': process_type.value if process_type else None,
-        'status': status_filter.value if status_filter else None,
+        'status': status_filter if status_filter else None,
         'title': title,
         'order_by': order_by,
         'order_desc': order_desc

@@ -7,7 +7,7 @@ from app.db.session import get_db
 from app.models.user import User
 from app.schemas.process import (
     ProcessCreate, ProcessUpdate, ProcessResponse, ProcessSummary,
-    ProcessTypeEnum, ProcessStatusEnum
+    ProcessTypeEnum
 )
 from app.security.auth import get_current_user
 from app.services.process_service import process_service
@@ -46,7 +46,7 @@ def read_processes(
     limit: int = 100,
     company_id: Optional[UUID] = Query(None, description="Filtrar por empresa"),
     process_type: Optional[ProcessTypeEnum] = Query(None, description="Filtrar por tipo"),
-    status_filter: Optional[ProcessStatusEnum] = Query(None, alias="status", description="Filtrar por status"),
+    status_filter: Optional[str] = Query(None, alias="status", description="Filtrar por status"),
     title: Optional[str] = Query(None, description="Buscar no título"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -66,7 +66,7 @@ def read_processes(
             'skip': skip,
             'limit': limit,
             'process_type': process_type.value if process_type else None,
-            'status': status_filter.value if status_filter else None,
+            'status': status_filter if status_filter else None,
             'title': title
         }
         
@@ -83,7 +83,7 @@ def read_processes(
         if process_type:
             processes = [p for p in processes if p.process_type.value == process_type.value]
         if status_filter:
-            processes = [p for p in processes if p.status.value == status_filter.value]
+            processes = [p for p in processes if p.status == status_filter]
         if title:
             processes = [p for p in processes if title.lower() in p.title.lower()]
     
@@ -223,3 +223,27 @@ def mark_process_scraped(
     )
     
     return ProcessResponse.model_validate(updated_process) 
+
+
+@router.patch("/{process_id}/scrape-status")
+def scrape_status_process(
+    process_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Atualiza o status do processo a partir da revista RPI mais recente via scraping.
+    """
+    # Buscar processo e validar acesso
+    process = access_control_service.validate_process_access(
+        db, current_user, process_id, "update_processes"
+    )
+    # Chamar o serviço de scraping
+    from app.services.scraping_service import scraping_service
+    result = scraping_service.scrape_and_update_process(
+        db=db,
+        process_number=process.process_number,
+        process_type=process.process_type,
+        company_id=process.company_id
+    )
+    return result 
