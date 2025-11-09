@@ -10,11 +10,39 @@
 
 ---
 
+## ⚡ **Informações Cruciais**
+
+### **⚠️ Código Legado - NÃO MODIFICAR**
+- `app/services/scraping_service.py` - **Código legado crítico**
+- `app/services/pdf_reader.py` - **Código legado crítico**
+- O responsável original não trabalha mais no projeto
+- Modificações podem quebrar funcionalidades críticas
+
+### **🔐 Variáveis de Ambiente Obrigatórias**
+**Desenvolvimento:**
+- `DATABASE_URL` - URL do banco PostgreSQL
+- `SECRET_KEY` - Chave secreta para JWT
+- `DEBUG=True` - Modo debug
+
+**Produção:**
+- `DATABASE_URL` - URL do banco de produção
+- `SECRET_KEY` - Chave secreta forte (256 bits)
+- `CORS_ORIGINS` - **OBRIGATÓRIO** - Domínios permitidos separados por vírgula
+- `DEBUG=False` - **CRÍTICO** - Desativar debug em produção
+
+### **🛡️ Segurança Implementada**
+- ✅ Rate limiting: Login (5/min), Registro (3/min) por IP
+- ✅ CORS configurável via `CORS_ORIGINS`
+- ✅ JWT com expiração configurável
+- ✅ Hash de senhas com bcrypt
+
+---
+
 ## 🚀 **Início Rápido**
 
 ### **Pré-requisitos**
 - Python 3.12+
-- PostgreSQL
+- PostgreSQL (ou Docker)
 - Git
 
 ### **1. Clonar e Configurar**
@@ -28,18 +56,36 @@ python -m venv venv
 source venv/bin/activate  # Linux/Mac
 # venv\Scripts\activate   # Windows
 
-# Instalar dependências
+# Instalar dependências (inclui slowapi para rate limiting)
 pip install -r requirements.txt
 ```
 
-### **2. Configurar Banco de Dados**
+### **2. Configurar Variáveis de Ambiente**
 ```bash
-# Configurar PostgreSQL (exemplo com Docker)
-docker-compose up -d
+# Criar arquivo .env
+cat > .env << EOF
+# Banco de Dados
+DATABASE_URL=postgresql://admin:Inicio@123@localhost:5432/intelectus_db
 
-# Ou configurar manualmente e ajustar .env
-cp .env.example .env
-# Editar DATABASE_URL no .env
+# Segurança
+SECRET_KEY=sua-chave-secreta-aqui-gerar-256-bits
+ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=30
+
+# Aplicação
+PROJECT_NAME=Intelectus API
+VERSION=0.1.0
+DEBUG=True
+
+# CORS (em produção, definir domínios específicos)
+# CORS_ORIGINS=https://app.intelectus.com.br,https://admin.intelectus.com.br
+
+# INPI Scraping
+RPI_BASE_URL=https://revistas.inpi.gov.br
+EOF
+
+# Ou configurar PostgreSQL com Docker
+docker-compose up -d
 ```
 
 ### **3. Usar o CLI para Setup**
@@ -60,6 +106,11 @@ python cli.py server run
 ### **4. Acessar API**
 - **Swagger/OpenAPI**: http://localhost:8000/docs
 - **Redoc**: http://localhost:8000/redoc
+- **Health Check**: http://localhost:8000/health
+
+**⚠️ Nota:** Rate limiting está ativo:
+- Login: máximo 5 tentativas por minuto por IP
+- Registro: máximo 3 tentativas por minuto por IP
 
 ---
 
@@ -257,14 +308,50 @@ python cli.py db downgrade -1
 python cli.py db history
 ```
 
-### **🔧 Configuração do Banco**
+### **🔧 Variáveis de Ambiente**
+
+#### **Desenvolvimento (.env)**
 ```bash
-# .env
-DATABASE_URL="postgresql://user:password@localhost:5432/intelectus_db"
-SECRET_KEY="sua_chave_secreta_muito_segura"
-ALGORITHM="HS256"
+# Banco de Dados
+DATABASE_URL=postgresql://admin:Inicio@123@localhost:5432/intelectus_db
+
+# Segurança (OBRIGATÓRIO)
+SECRET_KEY=sua-chave-secreta-256-bits-gerar-aleatoriamente
+ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=30
+
+# Aplicação
+PROJECT_NAME=Intelectus API
+VERSION=0.1.0
+DEBUG=True
+
+# CORS (em desenvolvimento, não é necessário)
+# Em produção, definir CORS_ORIGINS
 ```
+
+#### **Produção (.env)**
+```bash
+# Banco de Dados
+DATABASE_URL=postgresql://user:password@db-host:5432/intelectus_db
+
+# Segurança (CRÍTICO)
+SECRET_KEY=chave-super-secreta-256-bits-aleatoria
+ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=30
+
+# Aplicação
+PROJECT_NAME=Intelectus API
+VERSION=0.1.0
+DEBUG=False
+
+# CORS (OBRIGATÓRIO EM PRODUÇÃO)
+CORS_ORIGINS=https://app.intelectus.com.br,https://admin.intelectus.com.br
+
+# INPI Scraping
+RPI_BASE_URL=https://revistas.inpi.gov.br
+```
+
+**⚠️ IMPORTANTE:** Em produção, `CORS_ORIGINS` é obrigatório. Sem ele, todas as origens serão bloqueadas por segurança.
 
 **📚 Guia completo**: [MIGRATIONS.md](MIGRATIONS.md)
 
@@ -284,10 +371,12 @@ ACCESS_TOKEN_EXPIRE_MINUTES=30
 - **Auditoria completa** - quem, quando, o que, por que
 
 ### **🛡️ Middleware de Segurança**
-- CORS configurado
-- TrustedHost middleware
-- Rate limiting (preparado)
-- Validação automática de inputs
+- **CORS configurado** - Configurável via `CORS_ORIGINS` (obrigatório em produção)
+- **TrustedHost middleware** - Proteção contra host header attacks
+- **Rate limiting** - Proteção contra brute force:
+  - Login: 5 tentativas por minuto por IP
+  - Registro: 3 tentativas por minuto por IP
+- **Validação automática** de inputs via Pydantic
 
 ---
 
@@ -338,24 +427,31 @@ python cli.py server run
 # Servidor em porta específica  
 python cli.py server run --port 3000
 
-# Servidor produção
-python cli.py server run --no-reload --workers 4
+# Servidor produção (com uvicorn)
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+
+# Ou com gunicorn (recomendado para produção)
+# Instalar: pip install gunicorn
+gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
 ```
 
 ### **🐳 Docker (Opcional)**
-```yaml
-# docker-compose.yml para PostgreSQL
-version: '3.8'
-services:
-  postgres:
-    image: bitnami/postgresql:latest
-    ports:
-      - "5432:5432"
-    environment:
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: "password"  
-      POSTGRES_DB: intelectus_db
+```bash
+# Iniciar PostgreSQL com Docker Compose
+docker-compose up -d
+
+# Verificar status
+docker-compose ps
+
+# Parar PostgreSQL
+docker-compose down
 ```
+
+**Configuração do docker-compose.yml:**
+- Usuário: `admin`
+- Senha: `Inicio@123`
+- Banco: `intelectus_db`
+- Porta: `5432`
 
 ---
 
@@ -382,19 +478,29 @@ Todos os endpoints incluem:
 
 ## 🚀 **Deploy e Produção**
 
-### **⚙️ Variáveis de Ambiente**
-```bash
-# Produção
-DATABASE_URL="postgresql://..."
-SECRET_KEY="chave-super-secreta-256-bits"
-ALGORITHM="HS256"  
-ACCESS_TOKEN_EXPIRE_MINUTES=30
+### **⚙️ Variáveis de Ambiente (Produção)**
 
-# Opcional
-CORS_ORIGINS='["https://meuapp.com"]'
-DEBUG=false
-LOG_LEVEL=INFO
+**Variáveis Obrigatórias:**
+```bash
+DATABASE_URL=postgresql://user:password@host:5432/intelectus_db
+SECRET_KEY=chave-super-secreta-256-bits-aleatoria
+CORS_ORIGINS=https://app.intelectus.com.br,https://admin.intelectus.com.br
+DEBUG=False
 ```
+
+**Variáveis Opcionais:**
+```bash
+ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=30
+PROJECT_NAME=Intelectus API
+VERSION=0.1.0
+RPI_BASE_URL=https://revistas.inpi.gov.br
+```
+
+**⚠️ CRÍTICO:** 
+- `SECRET_KEY` deve ser uma string aleatória de 256 bits
+- `CORS_ORIGINS` é obrigatório em produção (sem ele, todas as origens são bloqueadas)
+- `DEBUG=False` em produção (segurança)
 
 ### **🐳 Deploy com Docker**
 ```dockerfile
@@ -408,12 +514,30 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 ### **🔧 Comando de Produção**
 ```bash
-# Aplicar migrations
+# 1. Instalar dependências
+pip install -r requirements.txt
+
+# 2. Configurar .env com variáveis de produção (obrigatório)
+# DATABASE_URL, SECRET_KEY, CORS_ORIGINS, DEBUG=False
+
+# 3. Aplicar migrations
 python cli.py db upgrade
 
-# Iniciar servidor produção
+# 4. Iniciar servidor produção
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+
+# Ou com gunicorn (recomendado para produção)
+# Instalar: pip install gunicorn
+gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
 ```
+
+**⚠️ Checklist de Produção:**
+- [ ] `DEBUG=False` no .env
+- [ ] `CORS_ORIGINS` configurado com domínios específicos
+- [ ] `SECRET_KEY` forte e aleatória
+- [ ] `DATABASE_URL` apontando para banco de produção
+- [ ] Migrations aplicadas
+- [ ] Rate limiting funcionando (slowapi instalado)
 
 ---
 
@@ -427,18 +551,28 @@ cd Intelectus-Api
 
 # 2. Setup ambiente
 python -m venv venv
-source venv/bin/activate
+source venv/bin/activate  # Linux/Mac
+# venv\Scripts\activate   # Windows
+
+# 3. Instalar dependências
 pip install -r requirements.txt
 
-# 3. Configurar banco local
+# 4. Configurar .env (ver seção "Configurar Variáveis de Ambiente")
+# DATABASE_URL=postgresql://admin:Inicio@123@localhost:5432/intelectus_db
+# SECRET_KEY=sua-chave-secreta-aqui
+# DEBUG=True
+
+# 5. Configurar banco local
+docker-compose up -d  # Ou configurar PostgreSQL manualmente
 python cli.py dev test-connection
 python cli.py db upgrade
 
-# 4. Criar admin para testes
+# 6. Criar admin para testes
 python cli.py dev create-admin
 
-# 5. Iniciar desenvolvimento
+# 7. Iniciar desenvolvimento
 python cli.py server run
+# API disponível em http://localhost:8000/docs
 ```
 
 ### **📋 Padrões de Código**
@@ -474,7 +608,7 @@ python cli.py server run
 ### 🎯 **Opcionais para Futuro**
 - [ ] Cache com Redis
 - [ ] Notificações push/email
-- [ ] Rate limiting
+- [x] Rate limiting (✅ implementado)
 - [ ] Logs centralizados
 - [ ] Métricas com Prometheus
 - [ ] 2FA/MFA

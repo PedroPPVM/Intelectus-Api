@@ -51,7 +51,12 @@ class ProcessService:
         )
         
         # Forçar company_id por segurança (evita manipulação de dados)
-        process_data.company_id = company_id
+        # Criar cópia do objeto para não modificar o original
+        process_data_dict = process_data.dict()
+        process_data_dict['company_id'] = company_id
+        # Criar novo objeto ProcessCreate com company_id garantido
+        from app.schemas.process import ProcessCreate
+        process_data = ProcessCreate(**process_data_dict)
         
         # Validar regras de negócio
         self.validate_process_business_rules(process_data)

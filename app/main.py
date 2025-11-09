@@ -3,6 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from app.core.config import settings
 from app.api.v1.api import api_router
@@ -37,6 +40,9 @@ def create_application() -> FastAPI:
     """
     Factory function para criar a aplicação FastAPI.
     """
+    # Configurar rate limiter
+    limiter = Limiter(key_func=get_remote_address)
+    
     app = FastAPI(
         title=settings.project_name,
         version=settings.version,
@@ -80,10 +86,26 @@ def create_application() -> FastAPI:
         openapi_tags=tags_metadata
     )
     
+    # Configurar rate limiter
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    
     # Configurar CORS
+    # Em produção, usar variável de ambiente CORS_ORIGINS com domínios específicos
+    # Exemplo: CORS_ORIGINS=https://app.intelectus.com.br,https://admin.intelectus.com.br
+    if settings.cors_origins:
+        # Parse da string de origens separadas por vírgula
+        allowed_origins = [origin.strip() for origin in settings.cors_origins.split(",")]
+    elif settings.debug:
+        # Em desenvolvimento, permitir todas as origens
+        allowed_origins = ["*"]
+    else:
+        # Em produção sem configuração, bloquear todas (segurança)
+        allowed_origins = []
+    
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # Em produção, especificar domínios específicos
+        allow_origins=allowed_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

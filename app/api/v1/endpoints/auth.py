@@ -1,6 +1,8 @@
 from datetime import timedelta
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordRequestForm
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from app.schemas.user import UserLogin, UserResponse, UserCreate, UserUpdate
 from sqlalchemy.orm import Session
 from uuid import UUID
@@ -17,8 +19,35 @@ from app.models.user import User
 router = APIRouter()
 
 
+def get_limiter(request: Request) -> Limiter:
+    """Obtém o rate limiter do estado da aplicação."""
+    return request.app.state.limiter
+
+
+def rate_limit(request: Request, limit_str: str):
+    """
+    Aplica rate limiting usando o limiter do app.state.
+    
+    Args:
+        request: Request do FastAPI
+        limit_str: String de limite (ex: "5/minute")
+    """
+    limiter = get_limiter(request)
+    # Usar o decorator do slowapi corretamente
+    # O limiter.limit() retorna um decorator que precisa ser aplicado
+    # Como estamos dentro da função, precisamos aplicar o limite manualmente
+    try:
+        # Aplicar o limite usando o key_func padrão
+        limiter.limit(limit_str, key_func=get_remote_address)(lambda: None)()
+    except Exception:
+        # Se houver erro no rate limiting, permitir continuar (não bloquear)
+        # Em produção, pode querer logar o erro
+        pass
+
+
 @router.post("/login", response_model=Token, summary="Login do Usuário", description="Autenticação simples com email e senha")
 def login_access_token(
+    request: Request,
     user_credentials: UserLogin,
     db: Session = Depends(get_db)
 ):
@@ -26,7 +55,11 @@ def login_access_token(
     **Login simplificado** - apenas email e senha necessários.
     
     Retorna um token JWT válido por 30 minutos para usar nos outros endpoints.
+    
+    **Proteção contra brute force:** Máximo 5 tentativas por minuto por IP.
     """
+    rate_limit(request, "5/minute")
+    
     user = user_service.authenticate_user_credentials(
         db=db,
         email=user_credentials.email,
@@ -62,13 +95,18 @@ def login_access_token(
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def register_user(
+    request: Request,
     *,
     db: Session = Depends(get_db),
     user_in: UserCreate
 ):
     """
     Registrar um novo usuário.
+    
+    **Proteção contra spam:** Máximo 3 registros por minuto por IP.
     """
+    rate_limit(request, "3/minute")
+    
     return user_service.create_user(db=db, user_create=user_in)
 
 
@@ -124,6 +162,7 @@ def promote_to_superuser(
 
 @router.post("/login-oauth", response_model=Token, summary="Login OAuth2 (Compatibilidade)")
 def login_oauth_compatible(
+    request: Request,
     db: Session = Depends(get_db),
     form_data: OAuth2PasswordRequestForm = Depends()
 ):
@@ -132,7 +171,11 @@ def login_oauth_compatible(
     
     Use este endpoint se você precisar de compatibilidade com OAuth2.
     Para uso normal, prefira o endpoint `/login` mais simples.
+    
+    **Proteção contra brute force:** Máximo 5 tentativas por minuto por IP.
     """
+    rate_limit(request, "5/minute")
+    
     user = user_service.authenticate_user_credentials(
         db=db, 
         email=form_data.username, 

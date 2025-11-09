@@ -168,14 +168,15 @@ class CompanyService:
                 return crud_company.get_multi(db, skip=skip, limit=limit)
         else:
             # Usuário normal só vê suas empresas
-            companies = crud_company.get_by_user(db, user_id=user.id)
-            
-            # Aplicar filtro de nome se fornecido
             if name:
-                companies = [c for c in companies if name.lower() in c.name.lower()]
-            
-            # Aplicar paginação manual
-            return companies[skip:skip + limit]
+                # OTIMIZADO: Usar busca SQL em vez de filtro em memória
+                return crud_company.get_by_user_with_name_filter(
+                    db, user_id=user.id, name=name, skip=skip, limit=limit
+                )
+            else:
+                # Buscar empresas do usuário e aplicar paginação
+                companies = crud_company.get_by_user(db, user_id=user.id)
+                return companies[skip:skip + limit]
     
     def update_company_with_validation(
         self,

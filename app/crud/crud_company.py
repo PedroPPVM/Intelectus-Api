@@ -68,6 +68,26 @@ class CRUDCompany:
         user = db.query(User).filter(User.id == user_id).first()
         return user.companies if user else []
     
+    def get_by_user_with_name_filter(
+        self, db: Session, user_id: UUID, name: str, skip: int = 0, limit: int = 100
+    ) -> List[Company]:
+        """
+        Buscar empresas de um usuário com filtro de nome (busca SQL otimizada).
+        
+        OTIMIZADO: Usa SQL em vez de filtro em memória.
+        """
+        return (
+            db.query(Company)
+            .join(Company.users)
+            .filter(
+                User.id == user_id,
+                Company.name.ilike(f"%{name}%")
+            )
+            .offset(skip)
+            .limit(limit)
+            .all()
+        )
+    
     def search_by_name(
         self, db: Session, name: str, skip: int = 0, limit: int = 100
     ) -> List[Company]:

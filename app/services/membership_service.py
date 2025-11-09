@@ -293,19 +293,48 @@ class MembershipService:
         
         memberships = query.offset(skip).limit(limit).all()
         
+        # OTIMIZADO: Usar batch loading para evitar N+1 queries
+        # Carregar usuários e empresas em lotes
+        if not memberships:
+            return []
+        
+        user_ids = list(set([m.user_id for m in memberships]))
+        company_ids = list(set([m.company_id for m in memberships]))
+        
+        # Buscar usuários e empresas em lotes
+        users_dict = {u.id: u for u in db.query(User).filter(User.id.in_(user_ids)).all()}
+        companies_dict = {c.id: c for c in db.query(Company).filter(Company.id.in_(company_ids)).all()}
+        
+        # Contar permissões em lote para todos os memberships
+        permission_counts = {}
+        if memberships:
+            # Criar lista de tuplas (user_id, company_id) para filtrar
+            membership_keys = [(m.user_id, m.company_id) for m in memberships]
+            
+            # Buscar todas as permissões relevantes
+            all_permissions = db.query(UserCompanyPermission).filter(
+                and_(
+                    UserCompanyPermission.user_id.in_(user_ids),
+                    UserCompanyPermission.company_id.in_(company_ids)
+                )
+            ).all()
+            
+            # Contar permissões por membership
+            for perm in all_permissions:
+                key = (perm.user_id, perm.company_id)
+                if key in membership_keys:
+                    permission_counts[key] = permission_counts.get(key, 0) + 1
+        
         # Converter para summary com informações de usuário
         summaries = []
         for membership in memberships:
-            user = db.query(User).filter(User.id == membership.user_id).first()
-            company = db.query(Company).filter(Company.id == membership.company_id).first()
+            user = users_dict.get(membership.user_id)
+            company = companies_dict.get(membership.company_id)
             
-            # Contar permissões
-            permissions_count = db.query(UserCompanyPermission).filter(
-                and_(
-                    UserCompanyPermission.user_id == membership.user_id,
-                    UserCompanyPermission.company_id == membership.company_id
-                )
-            ).count()
+            # Obter contagem de permissões do dicionário
+            permissions_count = permission_counts.get(
+                (membership.user_id, membership.company_id), 0
+            )
             
             summary = MembershipSummary(
                 user_id=membership.user_id,

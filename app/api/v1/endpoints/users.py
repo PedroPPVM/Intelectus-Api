@@ -7,7 +7,7 @@ from app.db.session import get_db
 from app.models.user import User
 from app.schemas.user import UserCreate, UserUpdate, UserResponse
 from app.security.auth import get_current_user, get_current_superuser
-from app.crud import user as crud_user
+from app.services.user_service import user_service
 
 
 router = APIRouter()
@@ -22,15 +22,17 @@ def read_users(
 ):
     """
     Listar todos os usuários (apenas superusuários).
+    
+    REFATORADO: Usa UserService para transformação padronizada.
     """
+    from app.crud import user as crud_user
     users = crud_user.get_multi(db, skip=skip, limit=limit)
     
-    # Preparar resposta com company_ids
+    # Usar UserService para transformação padronizada
     response_data = []
     for user in users:
-        user_data = UserResponse.model_validate(user)
-        user_data.company_ids = [company.id for company in user.companies]
-        response_data.append(user_data)
+        user_response = user_service.get_user_by_id(db, user.id)
+        response_data.append(user_response)
     
     return response_data
 
@@ -45,14 +47,9 @@ def read_user(
     Obter dados de um usuário específico.
     Usuários normais só podem ver seus próprios dados.
     Superusuários podem ver qualquer usuário.
-    """
-    user = crud_user.get(db, id=user_id)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Usuário não encontrado"
-        )
     
+    REFATORADO: Usa UserService para validação e transformação padronizada.
+    """
     # Verificar permissões
     if not current_user.is_superuser and current_user.id != user_id:
         raise HTTPException(
@@ -60,11 +57,8 @@ def read_user(
             detail="Acesso negado"
         )
     
-    # Preparar resposta
-    user_data = UserResponse.model_validate(user)
-    user_data.company_ids = [company.id for company in user.companies]
-    
-    return user_data
+    # Usar UserService para validação e transformação padronizada
+    return user_service.get_user_by_id(db, user_id)
 
 
 @router.put("/{user_id}", response_model=UserResponse)
@@ -77,14 +71,9 @@ def update_user(
     """
     Atualizar dados de um usuário.
     Usuários normais só podem atualizar seus próprios dados.
-    """
-    user = crud_user.get(db, id=user_id)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Usuário não encontrado"
-        )
     
+    REFATORADO: Usa UserService para validação e transformação padronizada.
+    """
     # Verificar permissões
     if not current_user.is_superuser and current_user.id != user_id:
         raise HTTPException(
@@ -96,14 +85,14 @@ def update_user(
     if not current_user.is_superuser and user_in.is_superuser is not None:
         user_in.is_superuser = None
     
-    # Atualizar usuário
-    updated_user = crud_user.update(db, db_obj=user, obj_in=user_in)
-    
-    # Preparar resposta
-    user_data = UserResponse.model_validate(updated_user)
-    user_data.company_ids = [company.id for company in updated_user.companies]
-    
-    return user_data
+    # REFATORADO: Usar UserService para atualização e transformação padronizada
+    # O UserService já valida se o usuário existe
+    return user_service.update_user(
+        db=db,
+        user_id=user_id,
+        user_update=user_in,
+        updated_by_user_id=current_user.id
+    )
 
 
 @router.delete("/{user_id}")
@@ -114,14 +103,9 @@ def delete_user(
 ):
     """
     Deletar um usuário (apenas superusuários).
-    """
-    user = crud_user.get(db, id=user_id)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Usuário não encontrado"
-        )
     
+    REFATORADO: Usa UserService para validação e exclusão padronizada.
+    """
     # Não permitir deletar a si mesmo
     if current_user.id == user_id:
         raise HTTPException(
@@ -129,7 +113,13 @@ def delete_user(
             detail="Não é possível deletar seu próprio usuário"
         )
     
-    crud_user.delete(db, id=user_id)
+    # REFATORADO: Usar UserService para exclusão padronizada
+    # O UserService já valida se o usuário existe
+    user_service.delete_user(
+        db=db,
+        user_id=user_id,
+        deleted_by_user_id=current_user.id
+    )
     
     return {"message": "Usuário deletado com sucesso"}
 

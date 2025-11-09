@@ -9,6 +9,7 @@ from app.schemas.alert import AlertCreate, AlertUpdate, AlertResponse, AlertType
 from app.security.auth import get_current_user, get_current_superuser
 from app.services.alert_service import alert_service
 from app.services.access_control_service import access_control_service
+from app.crud import alert as crud_alert
 
 
 router = APIRouter()
@@ -70,6 +71,9 @@ def get_unread_count(
 ):
     """
     Obter número de alertas não lidos do usuário atual.
+    
+    REFATORADO: Mantido uso direto de CRUD pois é operação simples de contagem.
+    Para operações mais complexas, usar AlertService.
     """
     count = crud_alert.count_unread_by_user(db, user_id=current_user.id)
     
@@ -140,8 +144,10 @@ def mark_all_alerts_read(
 ):
     """
     Marcar todos os alertas do usuário como lidos.
+    
+    REFATORADO: Usa AlertService para operação padronizada.
     """
-    count = crud_alert.mark_all_as_read_by_user(db, user_id=current_user.id)
+    count = alert_service.mark_all_user_alerts_as_read(db, current_user)
     
     return {"message": f"{count} alertas marcados como lidos"}
 
