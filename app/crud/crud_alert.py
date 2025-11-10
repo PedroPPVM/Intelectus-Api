@@ -16,6 +16,11 @@ class CRUDAlert:
         """
         Criar um novo alerta.
         """
+        import logging
+        logger = logging.getLogger('intelectus.crud_alert')
+        
+        logger.debug(f"Criando alerta: title='{obj_in.title}', type={obj_in.alert_type}, user_id={obj_in.user_id}, process_id={obj_in.process_id}")
+        
         db_alert = Alert(
             title=obj_in.title,
             message=obj_in.message,
@@ -29,6 +34,8 @@ class CRUDAlert:
         db.add(db_alert)
         db.commit()
         db.refresh(db_alert)
+        
+        logger.debug(f"Alerta criado com sucesso: ID={db_alert.id}")
         return db_alert
     
     def get(self, db: Session, id: UUID) -> Optional[Alert]:
@@ -91,11 +98,23 @@ class CRUDAlert:
         )
     
     def get_by_type(
-        self, db: Session, alert_type: str, skip: int = 0, limit: int = 100
+        self, db: Session, alert_type, skip: int = 0, limit: int = 100
     ) -> List[Alert]:
         """
         Buscar alertas por tipo.
+        
+        Args:
+            alert_type: Pode ser string ou AlertType enum
         """
+        # Converter string para enum se necessário
+        from app.models.alert import AlertType
+        if isinstance(alert_type, str):
+            try:
+                alert_type = AlertType(alert_type)
+            except ValueError:
+                # Tipo inválido, retornar lista vazia
+                return []
+        
         return (
             db.query(Alert)
             .filter(Alert.alert_type == alert_type)

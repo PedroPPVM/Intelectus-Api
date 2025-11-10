@@ -2,7 +2,7 @@ from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, func, desc
 from uuid import UUID
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException, status
 
 from app.models.user import User
@@ -54,7 +54,7 @@ class MembershipService:
         if existing:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Membership já existe para este usuário e empresa"
+                detail="Membership já existe para este usuário e empresa. Use o endpoint de atualização para modificar."
             )
         
         # Criar membership principal
@@ -134,7 +134,10 @@ class MembershipService:
         # Aplicar mudanças
         changes = []
         if membership_update.role and membership_update.role.value != membership.role.value:
-            membership.role = MembershipRole(membership_update.role.value)
+            # Usar o enum diretamente do schema (já é MembershipRoleEnum)
+            # Converter para MembershipRole usando o valor
+            role_value = membership_update.role.value  # 'owner', 'admin', etc.
+            membership.role = MembershipRole(role_value)
             changes.append(f"role: {old_role.value} → {membership.role.value}")
         
         if membership_update.is_active is not None and membership_update.is_active != membership.is_active:
@@ -163,7 +166,9 @@ class MembershipService:
             
             changes.append(f"permissions: {len(membership_update.permissions)} updated")
         
-        membership.updated_at = func.now()
+        # Atualizar updated_at apenas se houver mudanças
+        if changes:
+            membership.updated_at = datetime.now(timezone.utc)
         
         # Criar registro de auditoria se houve mudanças
         if changes:
@@ -181,6 +186,16 @@ class MembershipService:
         
         db.commit()
         db.refresh(membership)
+        
+        # Verificar se o role foi atualizado corretamente após o refresh
+        # O TypeDecorator deve converter a string do banco de volta para o enum
+        if membership.role and not isinstance(membership.role, MembershipRole):
+            # Se o role não for um enum, tentar converter
+            try:
+                membership.role = MembershipRole(membership.role)
+            except (ValueError, KeyError):
+                # Se não conseguir converter, usar o valor antigo
+                membership.role = old_role
         
         return self._build_membership_response(db, membership)
     
@@ -586,6 +601,110 @@ class MembershipService:
                     )
                 )
             )
+    
+    def migrate_legacy_associations_to_memberships(
+        self,
+        db: Session,
+        company_id: Optional[UUID] = None
+    ) -> Dict[str, Any]:
+        """
+        Migrar associações legadas (user_company_association) para memberships.
+        
+        Útil para migrar dados existentes que foram criados antes do sistema de memberships.
+        
+        Args:
+            db: Sessão do banco
+            company_id: ID da empresa (opcional, se None migra todas)
+            
+        Returns:
+            Dict com estatísticas da migração
+        """
+        from app.models.user import user_company_association
+        from app.models.company import Company
+        
+        stats = {
+            "migrated": 0,
+            "skipped": 0,
+            "errors": 0,
+            "errors_details": []
+        }
+        
+        # Buscar todas as associações legadas
+        if company_id:
+            # Migrar apenas para uma empresa específica
+            company = db.query(Company).filter(Company.id == company_id).first()
+            if not company:
+                stats["errors"] = 1
+                stats["errors_details"].append(f"Empresa {company_id} não encontrada")
+                return stats
+            
+            # Buscar associações legadas para esta empresa
+            legacy_associations = db.execute(
+                user_company_association.select().where(
+                    user_company_association.c.company_id == company_id
+                )
+            ).all()
+        else:
+            # Migrar todas as associações legadas
+            legacy_associations = db.execute(
+                user_company_association.select()
+            ).all()
+        
+        # Migrar cada associação
+        for assoc in legacy_associations:
+            user_id = assoc.user_id
+            comp_id = assoc.company_id
+            
+            try:
+                # Verificar se membership já existe
+                existing_membership = db.query(UserCompanyMembership).filter(
+                    UserCompanyMembership.user_id == user_id,
+                    UserCompanyMembership.company_id == comp_id
+                ).first()
+                
+                if existing_membership:
+                    # Membership já existe, apenas reativar se estiver inativo
+                    if not existing_membership.is_active:
+                        existing_membership.is_active = True
+                        stats["migrated"] += 1
+                    else:
+                        stats["skipped"] += 1
+                else:
+                    # Criar novo membership
+                    # Determinar role: se é o primeiro usuário da empresa, OWNER, senão MEMBER
+                    company_users = db.execute(
+                        user_company_association.select().where(
+                            user_company_association.c.company_id == comp_id
+                        ).order_by(user_company_association.c.created_at.asc())
+                    ).all()
+                    
+                    is_first_user = company_users[0].user_id == user_id if company_users else False
+                    # Usar o valor do enum corretamente (minúsculo: 'owner' ou 'member')
+                    # Criar o enum a partir do valor string para garantir que o SQLAlchemy use o valor correto
+                    if is_first_user:
+                        role_enum = MembershipRole.OWNER  # MembershipRole.OWNER.value = 'owner'
+                    else:
+                        role_enum = MembershipRole.MEMBER  # MembershipRole.MEMBER.value = 'member'
+                    
+                    membership = UserCompanyMembership(
+                        user_id=user_id,
+                        company_id=comp_id,
+                        role=role_enum,
+                        is_active=True,
+                        created_by_user_id=user_id  # Auto-migração
+                    )
+                    db.add(membership)
+                    stats["migrated"] += 1
+                
+                db.commit()
+            except Exception as e:
+                db.rollback()
+                stats["errors"] += 1
+                stats["errors_details"].append(
+                    f"Erro ao migrar user_id={user_id}, company_id={comp_id}: {str(e)}"
+                )
+        
+        return stats
 
 
 # Instância singleton do service

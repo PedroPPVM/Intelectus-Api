@@ -1,3 +1,4 @@
+import logging
 from typing import List, Optional, Dict, Any
 from uuid import UUID
 from datetime import datetime
@@ -7,9 +8,14 @@ from sqlalchemy.orm import Session
 from app.models.alert import Alert, AlertType
 from app.models.user import User
 from app.models.process import Process
+from app.models.company import Company
 from app.schemas.alert import AlertCreate, AlertUpdate, AlertResponse
 from app.crud import alert as crud_alert
 from app.services.access_control_service import access_control_service
+from app.models.membership import UserCompanyMembership
+
+# Logger para este módulo
+logger = logging.getLogger('intelectus.alert_service')
 
 
 class AlertService:
@@ -88,24 +94,43 @@ class AlertService:
         unread_only = filters.get('unread_only', False)
         alert_type = filters.get('alert_type')
         
+        logger.debug(f"Buscando alertas para usuário {user.id} com filtros: {filters}")
+        
         if user.is_superuser:
             # Superusuário pode ver todos os alertas
+            logger.debug(f"Usuário é superusuário, buscando todos os alertas")
             if alert_type:
-                return crud_alert.get_by_type(db, alert_type=alert_type, skip=skip, limit=limit)
+                # Converter string para enum se necessário
+                from app.models.alert import AlertType
+                try:
+                    if isinstance(alert_type, str):
+                        alert_type_enum = AlertType(alert_type)
+                    else:
+                        alert_type_enum = alert_type
+                    alerts = crud_alert.get_by_type(db, alert_type=alert_type_enum, skip=skip, limit=limit)
+                except ValueError:
+                    logger.warning(f"Tipo de alerta inválido: {alert_type}")
+                    alerts = []
             else:
-                return crud_alert.get_multi(db, skip=skip, limit=limit)
+                alerts = crud_alert.get_multi(db, skip=skip, limit=limit)
         else:
             # Usuário normal só vê seus alertas
+            logger.debug(f"Usuário normal, buscando alertas do usuário {user.id}")
             if unread_only:
                 alerts = crud_alert.get_unread_by_user(db, user_id=user.id, skip=skip, limit=limit)
+                logger.debug(f"Encontrados {len(alerts)} alertas não lidos para usuário {user.id}")
             else:
                 alerts = crud_alert.get_by_user(db, user_id=user.id, skip=skip, limit=limit)
+                logger.debug(f"Encontrados {len(alerts)} alertas para usuário {user.id}")
             
             # Aplicar filtro por tipo se fornecido
             if alert_type:
+                logger.debug(f"Aplicando filtro por tipo: {alert_type}")
                 alerts = [a for a in alerts if a.alert_type.value == alert_type]
-            
-            return alerts
+                logger.debug(f"Após filtro por tipo, restam {len(alerts)} alertas")
+        
+        logger.info(f"Retornando {len(alerts)} alertas para usuário {user.id}")
+        return alerts
     
     def mark_alert_as_read_with_audit(
         self,
@@ -263,6 +288,113 @@ class AlertService:
         alert = crud_alert.create(db, obj_in=alert_data)
         
         return alert
+    
+    def create_process_update_alert(
+        self,
+        db: Session,
+        process: Process,
+        old_status: Optional[str] = None,
+        new_status: Optional[str] = None,
+        update_details: Optional[Dict[str, Any]] = None
+    ) -> List[Alert]:
+        """
+        Criar alertas de atualização de processo para todos os usuários da empresa.
+        
+        Usado internamente pelo sistema quando processos são atualizados.
+        Não exige superusuário pois é chamado internamente.
+        
+        Args:
+            db: Sessão do banco
+            process: Processo atualizado
+            old_status: Status anterior (opcional)
+            new_status: Novo status (opcional)
+            update_details: Detalhes adicionais da atualização (opcional)
+            
+        Returns:
+            List[Alert]: Lista de alertas criados
+        """
+        # Buscar todos os usuários ativos da empresa que possui o processo
+        # Primeiro tenta memberships (sistema novo), depois fallback para associação legada
+        logger.debug(f"Buscando memberships ativos para empresa {process.company_id}")
+        memberships = db.query(UserCompanyMembership).filter(
+            UserCompanyMembership.company_id == process.company_id,
+            UserCompanyMembership.is_active == True
+        ).all()
+        
+        user_ids_to_notify = []
+        
+        if memberships:
+            # Usar memberships se existirem
+            user_ids_to_notify = [m.user_id for m in memberships]
+            logger.info(f"Encontrados {len(memberships)} memberships ativos para empresa {process.company_id}")
+            logger.debug(f"User IDs dos memberships: {user_ids_to_notify}")
+        else:
+            # Fallback para sistema legado (user_company_association)
+            logger.debug(f"Nenhum membership encontrado, usando sistema legado (user_company_association)")
+            company = db.query(Company).filter(Company.id == process.company_id).first()
+            if company and company.users:
+                user_ids_to_notify = [user.id for user in company.users]
+                logger.info(f"Encontrados {len(user_ids_to_notify)} usuários via associação legada para empresa {process.company_id}")
+                logger.debug(f"User IDs da associação legada: {user_ids_to_notify}")
+            else:
+                logger.warning(f"Nenhum usuário encontrado (nem membership nem associação legada) para empresa {process.company_id}")
+                return []
+        
+        alerts_created = []
+        
+        # Determinar tipo e conteúdo do alerta
+        alert_type = AlertType.STATUS_CHANGE
+        title = f"Atualização no processo {process.process_number}"
+        
+        message_parts = [
+            f"O processo {process.process_number} foi atualizado:",
+            f"• Título: {process.title}",
+            f"• Tipo: {process.process_type.value}",
+        ]
+        
+        # Se houve mudança de status, destacar isso
+        if old_status and new_status and old_status != new_status:
+            message_parts.append(f"• Status anterior: {old_status}")
+            message_parts.append(f"• Novo status: {new_status}")
+            title = f"Mudança de status no processo {process.process_number}"
+        elif new_status:
+            message_parts.append(f"• Status: {new_status}")
+        
+        # Adicionar detalhes adicionais se fornecidos
+        if update_details:
+            if 'magazine_identifier' in update_details:
+                message_parts.append(f"• Revista RPI: {update_details['magazine_identifier']}")
+        
+        message = "\n".join(message_parts)
+        
+        # Criar alerta para cada usuário da empresa
+        logger.debug(f"Criando alertas para {len(user_ids_to_notify)} usuários")
+        for user_id in user_ids_to_notify:
+            try:
+                logger.debug(f"Criando alerta para usuário {user_id}")
+                alert_data = AlertCreate(
+                    title=title,
+                    message=message,
+                    alert_type=alert_type,
+                    user_id=user_id,
+                    process_id=process.id
+                )
+                
+                logger.debug(f"Dados do alerta: title='{title}', type={alert_type.value}, user_id={user_id}, process_id={process.id}")
+                
+                # Criar alerta diretamente (sistema interno, sem validação de superusuário)
+                alert = crud_alert.create(db, obj_in=alert_data)
+                alerts_created.append(alert)
+                logger.info(f"✅ Alerta criado com sucesso: ID={alert.id}, usuário={user_id}, processo={process.process_number}")
+            except Exception as e:
+                import traceback
+                logger.error(f"❌ Erro ao criar alerta para usuário {user_id}: {e}")
+                logger.debug(f"Traceback: {traceback.format_exc()}")
+                # Continuar com próximo usuário mesmo se falhar
+                continue
+        
+        logger.info(f"📊 Total de {len(alerts_created)} alertas criados com sucesso de {len(user_ids_to_notify)} tentativas")
+        return alerts_created
     
     def bulk_mark_alerts_read(
         self,

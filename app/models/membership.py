@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Text, DateTime, ForeignKey, Enum, Boolean, Table, ForeignKeyConstraint
+from sqlalchemy import Column, String, Text, DateTime, ForeignKey, Enum, Boolean, Table, ForeignKeyConstraint, TypeDecorator, VARCHAR
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from sqlalchemy.dialects.postgresql import UUID
@@ -17,6 +17,51 @@ class MembershipRole(enum.Enum):
     VIEWER = "viewer"          # Apenas visualização
 
 
+class MembershipRoleType(TypeDecorator):
+    """
+    TypeDecorator para garantir que o SQLAlchemy use o valor do enum, não o nome.
+    Usa String como impl para evitar problemas com o Enum interno do SQLAlchemy.
+    """
+    impl = VARCHAR(50)
+    cache_ok = True
+    
+    def __init__(self, enum_class, **kwargs):
+        # Remover parâmetros do Enum que não são necessários para String
+        kwargs.pop('native_enum', None)
+        kwargs.pop('name', None)
+        super().__init__(**kwargs)
+        self.enum_class = enum_class
+    
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if isinstance(value, self.enum_class):
+            return value.value  # Usar o valor do enum, não o nome
+        if isinstance(value, str):
+            return value
+        return value
+    
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        # O valor vem do banco como string ('owner'), precisamos converter para o enum
+        if isinstance(value, str):
+            # Buscar o enum pelo valor
+            for enum_member in self.enum_class:
+                if enum_member.value == value:
+                    return enum_member
+            # Se não encontrar pelo valor, tentar pelo nome (fallback)
+            try:
+                return self.enum_class[value]
+            except KeyError:
+                # Se não encontrar nem pelo nome, tentar criar pelo valor
+                return self.enum_class(value)
+        # Se já for um enum, retornar direto
+        if isinstance(value, self.enum_class):
+            return value
+        return value
+
+
 class MembershipPermission(enum.Enum):
     """
     Permissões granulares que podem ser atribuídas.
@@ -32,6 +77,51 @@ class MembershipPermission(enum.Enum):
     MANAGE_BILLING = "manage_billing"
 
 
+class MembershipPermissionType(TypeDecorator):
+    """
+    TypeDecorator para garantir que o SQLAlchemy use o valor do enum, não o nome.
+    Usa String como impl para evitar problemas com o Enum interno do SQLAlchemy.
+    """
+    impl = VARCHAR(100)
+    cache_ok = True
+    
+    def __init__(self, enum_class, **kwargs):
+        # Remover parâmetros do Enum que não são necessários para String
+        kwargs.pop('native_enum', None)
+        kwargs.pop('name', None)
+        super().__init__(**kwargs)
+        self.enum_class = enum_class
+    
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if isinstance(value, self.enum_class):
+            return value.value  # Usar o valor do enum, não o nome
+        if isinstance(value, str):
+            return value
+        return value
+    
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        # O valor vem do banco como string ('read_processes'), precisamos converter para o enum
+        if isinstance(value, str):
+            # Buscar o enum pelo valor
+            for enum_member in self.enum_class:
+                if enum_member.value == value:
+                    return enum_member
+            # Se não encontrar pelo valor, tentar pelo nome (fallback)
+            try:
+                return self.enum_class[value]
+            except KeyError:
+                # Se não encontrar nem pelo nome, tentar criar pelo valor
+                return self.enum_class(value)
+        # Se já for um enum, retornar direto
+        if isinstance(value, self.enum_class):
+            return value
+        return value
+
+
 class UserCompanyMembership(Base):
     """
     Tabela principal para relacionamento User ↔ Company com roles.
@@ -44,7 +134,8 @@ class UserCompanyMembership(Base):
     company_id = Column(UUID(as_uuid=True), ForeignKey('company.id'), primary_key=True)
     
     # Informações do membership
-    role = Column(Enum(MembershipRole), default=MembershipRole.MEMBER, nullable=False)
+    # Usar MembershipRoleType para garantir que o SQLAlchemy use o valor do enum, não o nome
+    role = Column(MembershipRoleType(MembershipRole), default=MembershipRole.MEMBER, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     
     # Metadados
@@ -76,8 +167,8 @@ class MembershipHistory(Base):
     
     # Ação realizada
     action = Column(String(50), nullable=False)  # CREATE, UPDATE, DELETE, ACTIVATE, DEACTIVATE
-    old_role = Column(Enum(MembershipRole), nullable=True)
-    new_role = Column(Enum(MembershipRole), nullable=True)
+    old_role = Column(MembershipRoleType(MembershipRole), nullable=True)
+    new_role = Column(MembershipRoleType(MembershipRole), nullable=True)
     reason = Column(Text, nullable=True)
     
     # Metadados de auditoria
@@ -105,7 +196,7 @@ class UserCompanyPermission(Base):
     # Referências
     user_id = Column(UUID(as_uuid=True), nullable=False)
     company_id = Column(UUID(as_uuid=True), nullable=False)
-    permission = Column(Enum(MembershipPermission), nullable=False)
+    permission = Column(MembershipPermissionType(MembershipPermission), nullable=False)
     
     # Metadados
     granted_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

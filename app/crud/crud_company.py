@@ -4,6 +4,7 @@ from uuid import UUID
 
 from app.models.company import Company
 from app.models.user import User
+from app.models.membership import UserCompanyMembership, MembershipRole
 from app.schemas.company import CompanyCreate, CompanyUpdate
 
 
@@ -35,7 +36,30 @@ class CRUDCompany:
         # Associar com usuários se fornecidos
         if obj_in.user_ids:
             users = db.query(User).filter(User.id.in_(obj_in.user_ids)).all()
+            
+            # Criar associação legada (para compatibilidade)
             db_company.users.extend(users)
+            
+            # Criar memberships automaticamente (sistema novo)
+            for user in users:
+                # Verificar se membership já existe
+                existing_membership = db.query(UserCompanyMembership).filter(
+                    UserCompanyMembership.user_id == user.id,
+                    UserCompanyMembership.company_id == db_company.id
+                ).first()
+                
+                if not existing_membership:
+                    # Criar membership com role padrão (OWNER para o primeiro usuário, MEMBER para os demais)
+                    # Usar o enum diretamente - SQLAlchemy deve usar o valor automaticamente
+                    role = MembershipRole.OWNER if user == users[0] else MembershipRole.MEMBER
+                    membership = UserCompanyMembership(
+                        user_id=user.id,
+                        company_id=db_company.id,
+                        role=role,
+                        is_active=True,
+                        created_by_user_id=user.id  # Auto-criação
+                    )
+                    db.add(membership)
         
         db.commit()
         db.refresh(db_company)
@@ -115,7 +139,46 @@ class CRUDCompany:
             user_ids = update_data.pop("user_ids")
             if user_ids is not None:
                 users = db.query(User).filter(User.id.in_(user_ids)).all()
+                
+                # Atualizar associação legada
                 db_obj.users = users
+                
+                # Sincronizar memberships (adicionar novos, manter existentes, desativar removidos)
+                current_user_ids = {user.id for user in users}
+                
+                # Buscar memberships atuais
+                current_memberships = db.query(UserCompanyMembership).filter(
+                    UserCompanyMembership.company_id == db_obj.id
+                ).all()
+                
+                current_membership_user_ids = {m.user_id for m in current_memberships}
+                
+                # Adicionar memberships para novos usuários
+                for user in users:
+                    if user.id not in current_membership_user_ids:
+                        # Verificar se membership existe mas está inativo
+                        existing_inactive = db.query(UserCompanyMembership).filter(
+                            UserCompanyMembership.user_id == user.id,
+                            UserCompanyMembership.company_id == db_obj.id
+                        ).first()
+                        
+                        if existing_inactive:
+                            # Reativar membership existente
+                            existing_inactive.is_active = True
+                        else:
+                            # Criar novo membership
+                            membership = UserCompanyMembership(
+                                user_id=user.id,
+                                company_id=db_obj.id,
+                                role=MembershipRole.MEMBER,
+                                is_active=True
+                            )
+                            db.add(membership)
+                
+                # Desativar memberships para usuários removidos
+                for membership in current_memberships:
+                    if membership.user_id not in current_user_ids:
+                        membership.is_active = False
         
         # Atualizar demais campos
         for field, value in update_data.items():

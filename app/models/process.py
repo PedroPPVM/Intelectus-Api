@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Date, Enum, ForeignKey, DateTime
+from sqlalchemy import Column, String, Date, Enum, ForeignKey, DateTime, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from sqlalchemy.dialects.postgresql import UUID
@@ -68,6 +68,11 @@ class Process(Base):
     
     # Relacionamento com revista RPI
     magazine_id = Column(UUID(as_uuid=True), ForeignKey("rpi_magazine.id"), nullable=True, index=True)
+    
+    # Flag para indicar se o processo foi editado manualmente
+    # True = editado manualmente (precisa ser reprocessado)
+    # False = atualizado via scraping (pode pular processamento se revista já processada)
+    is_edited = Column(Boolean, default=False, nullable=False, index=True)
     
     # Relacionamentos
     company = relationship("Company", back_populates="processes")

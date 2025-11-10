@@ -2,6 +2,7 @@ import os
 import requests
 import re
 import hashlib
+import logging
 from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy.orm import Session
@@ -11,6 +12,9 @@ from app.crud import process as crud_process
 from app.crud.crud_rpi_magazine import rpi_magazine as crud_rpi_magazine
 from app.schemas.process import ProcessUpdate
 from bs4 import BeautifulSoup
+
+# Logger para este módulo
+logger = logging.getLogger('intelectus.scraping_service')
 
 DOWNLOAD_DIR = 'downloads'
 BASE_URL = 'https://revistas.inpi.gov.br/rpi/'
@@ -133,11 +137,11 @@ class ScrapingService:
 
     def _download_pdf(self, url):
         file_name = os.path.join(DOWNLOAD_DIR, url.split('/')[-1])
-        print(f"[DEBUG] Baixando PDF de: {url}")
+        logger.debug(f"Baixando PDF de: {url}")
         response = requests.get(url)
         with open(file_name, 'wb') as f:
             f.write(response.content)
-        print(f"[DEBUG] PDF salvo em: {file_name}")
+        logger.debug(f"PDF salvo em: {file_name}")
         return file_name
 
     def _remove_pdf(self, file_path):
@@ -155,7 +159,7 @@ class ScrapingService:
         # Buscar links das últimas revistas disponíveis
         links = self._get_latest_links()
         pdf_url = links.get(process_type)
-        print(f"[DEBUG] Link do PDF selecionado: {pdf_url}")
+        logger.debug(f"Link do PDF selecionado: {pdf_url}")
         if not pdf_url:
             return {"response": "Tipo de processo não suportado.", "status": None}
         
@@ -174,16 +178,20 @@ class ScrapingService:
         
         # OTIMIZAÇÃO: Se a revista já foi processada e o processo já está associado a ela,
         # verificar se o status ainda está atualizado (pode ter mudado mesmo com a mesma revista)
+        # MAS: Sempre processar se o processo foi editado manualmente (is_edited=True)
         if existing_magazine and existing_magazine.processed_at is not None:
-            if proc.magazine_id == existing_magazine.id:
-                # Processo já está associado à última revista processada
+            if proc.magazine_id == existing_magazine.id and not proc.is_edited:
+                # Processo já está associado à última revista processada e não foi editado
                 # Retornar status atual sem processar novamente
+                logger.info(f"⏭️ Processo {process_number} já está atualizado com a última revista disponível e não foi editado manualmente")
                 return {
                     "response": "Processo já está atualizado com a última revista disponível.",
                     "status": proc.status,
                     "magazine_identifier": existing_magazine.magazine_identifier,
                     "skipped": True
                 }
+            elif proc.is_edited:
+                logger.info(f"🔄 Processo {process_number} foi editado manualmente (is_edited=True), reprocessando para resetar status")
         
         # Buscar soup para extrair data de publicação (se necessário)
         response = requests.get(BASE_URL)
@@ -195,7 +203,8 @@ class ScrapingService:
         )
         
         pdf_path = self._download_pdf(pdf_url)
-        print(f"[DEBUG] Buscando processo: {process_number}")
+        logger.info(f"📥 PDF baixado: {pdf_path}")
+        logger.info(f"🔍 Buscando processo {process_number} na revista...")
         try:
             # Chama o leitor de PDF correto
             if process_type == ProcessType.BRAND:
@@ -208,23 +217,67 @@ class ScrapingService:
                 data = pdf_reader.search_status_programa_de_computador(process_number, pdf_path)
             else:
                 data = None
-            print(f"[DEBUG] Resultado do pdf_reader: {data}")
+            logger.debug(f"Resultado do pdf_reader: {data}")
             if not data:
+                logger.warning(f"⚠️ Processo {process_number} não encontrado na revista")
                 return {"response": "Processo não encontrado na revista.", "status": None}
+            
+            logger.info(f"✅ Processo {process_number} encontrado na revista")
             # Atualizar status e revista se necessário
             status_atual = proc.status
             status_novo = data.get('status')
             update_data = {}
+            has_status_change = False
             
-            if status_novo and status_novo != status_atual:
+            # SEMPRE atualizar status para o da revista se disponível
+            # Isso garante que mesmo status editados manualmente sejam resetados
+            if status_novo:
+                # Verificar se o status realmente mudou
+                if status_novo != status_atual:
+                    has_status_change = True
+                    logger.info(f"🔄 Mudança de status detectada para processo {process_number}: {status_atual} -> {status_novo}")
+                else:
+                    logger.debug(f"Status do processo {process_number} já está atualizado: {status_novo}")
+                
+                # SEMPRE atualizar status para o da revista (resetar edições manuais)
                 update_data['status'] = status_novo
             
             # Sempre atualizar magazine_id para rastrear qual revista foi usada
             if proc.magazine_id != magazine.id:
                 update_data['magazine_id'] = magazine.id
             
+            # Marcar como não editado (atualizado via scraping)
+            # Sempre marcar como False quando atualizado via scraping
+            update_data['is_edited'] = False
+            
             if update_data:
-                crud_process.update(db, db_obj=proc, obj_in=ProcessUpdate(**update_data))
+                # Atualizar processo
+                updated_process = crud_process.update(db, db_obj=proc, obj_in=ProcessUpdate(**update_data))
+                db.refresh(updated_process)
+                
+                # Criar alertas se houve mudança de status
+                if has_status_change:
+                    try:
+                        logger.info(f"🔔 Criando alertas para mudança de status do processo {process_number}: '{status_atual}' -> '{status_novo}'")
+                        from app.services.alert_service import alert_service
+                        update_details = {
+                            'magazine_identifier': magazine.magazine_identifier
+                        }
+                        alerts_created = alert_service.create_process_update_alert(
+                            db=db,
+                            process=updated_process,
+                            old_status=status_atual,
+                            new_status=status_novo,
+                            update_details=update_details
+                        )
+                        logger.info(f"✅ Criados {len(alerts_created)} alertas para processo {process_number}")
+                        if len(alerts_created) == 0:
+                            logger.warning(f"⚠️ Nenhum alerta foi criado para processo {process_number}. Verifique se há memberships ativos na empresa {company_id}.")
+                    except Exception as e:
+                        import traceback
+                        logger.error(f"❌ Erro ao criar alerta para processo {process_number}: {e}")
+                        logger.debug(f"Traceback: {traceback.format_exc()}")
+                
                 # Atualizar processed_at da revista
                 from app.schemas.rpi_magazine import RPIMagazineUpdate
                 crud_rpi_magazine.update(

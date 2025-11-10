@@ -99,6 +99,7 @@ class ProcessUpdate(BaseModel):
     status: Optional[str] = None
     situation: Optional[ProcessSituationEnum] = None
     magazine_id: Optional[UUID] = None
+    is_edited: Optional[bool] = Field(None, description="Flag para indicar se foi editado manualmente")
 
 
 class ProcessInDB(ProcessBase):
@@ -108,6 +109,7 @@ class ProcessInDB(ProcessBase):
     id: UUID
     company_id: UUID
     magazine_id: Optional[UUID] = None
+    is_edited: bool = Field(default=False, description="Flag para indicar se foi editado manualmente")
     created_at: datetime
     updated_at: Optional[datetime] = None
     
@@ -122,6 +124,7 @@ class ProcessResponse(ProcessBase):
     id: UUID = Field(..., example="456e7890-e89b-12d3-a456-426614174111")
     company_id: UUID = Field(..., example="987fcdeb-51a2-43d1-b123-456789abcdef")
     magazine_id: Optional[UUID] = Field(None, example="789e1234-e89b-12d3-a456-426614174222")
+    is_edited: bool = Field(default=False, description="Flag para indicar se foi editado manualmente")
     created_at: datetime
     updated_at: Optional[datetime] = None
     

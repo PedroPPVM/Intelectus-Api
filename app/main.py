@@ -1,3 +1,4 @@
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -9,6 +10,23 @@ from slowapi.errors import RateLimitExceeded
 
 from app.core.config import settings
 from app.api.v1.api import api_router
+
+# Configurar logging da aplicação
+logging.basicConfig(
+    level=logging.DEBUG if settings.debug else logging.INFO,  # DEBUG em desenvolvimento para ver todos os logs
+    format='\033[36m[%(asctime)s]\033[0m \033[1m%(levelname)s\033[0m [%(name)s] - %(message)s',
+    datefmt='%H:%M:%S',
+    force=True  # Forçar reconfiguração se já foi configurado
+)
+
+# Reduzir verbosidade do SQLAlchemy
+logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
+logging.getLogger('sqlalchemy.pool').setLevel(logging.WARNING)
+logging.getLogger('sqlalchemy.dialects').setLevel(logging.WARNING)
+
+# Logger customizado para logs da aplicação
+app_logger = logging.getLogger('intelectus')
+app_logger.setLevel(logging.INFO)
 
 
 # Metadata para documentação OpenAPI/Swagger

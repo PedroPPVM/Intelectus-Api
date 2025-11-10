@@ -85,11 +85,21 @@ def get_company_members(
         has_access = membership_service.check_user_permission(
             db, current_user.id, company_id, "read_company_data"
         )
+        # Fallback: verificar se usuário está na empresa via associação legada
         if not has_access:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Acesso negado à empresa"
-            )
+            from app.models.company import Company
+            company = db.query(Company).filter(Company.id == company_id).first()
+            if not company:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Empresa não encontrada"
+                )
+            # Verificar se usuário está na empresa via associação legada
+            if current_user not in company.users:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Acesso negado à empresa"
+                )
     
     return membership_service.get_company_members(
         db=db,
@@ -165,14 +175,25 @@ def update_membership(
     # Obter IP para auditoria
     client_ip = request.client.host if request.client else None
     
-    return membership_service.update_membership(
-        db=db,
-        user_id=user_id,
-        company_id=company_id,
-        membership_update=membership_update,
-        updated_by_user_id=current_user.id,
-        ip_address=client_ip
-    )
+    try:
+        return membership_service.update_membership(
+            db=db,
+            user_id=user_id,
+            company_id=company_id,
+            membership_update=membership_update,
+            updated_by_user_id=current_user.id,
+            ip_address=client_ip
+        )
+    except Exception as e:
+        import traceback
+        import logging
+        logger = logging.getLogger('intelectus.memberships')
+        logger.error(f"Erro ao atualizar membership: {e}")
+        logger.debug(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro ao atualizar membership: {str(e)}"
+        )
 
 
 @router.delete("/{user_id}/companies/{company_id}")
@@ -321,6 +342,31 @@ def create_bulk_memberships(
             continue
     
     return results
+
+
+@router.post("/migrate", status_code=status.HTTP_200_OK)
+def migrate_legacy_associations(
+    company_id: Optional[UUID] = Query(None, description="ID da empresa (opcional, se None migra todas)"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_superuser)  # Apenas superusuários
+):
+    """
+    **Migrar associações legadas** para memberships.
+    
+    Útil para migrar empresas criadas antes do sistema de memberships.
+    Cria memberships a partir das associações legadas (user_company_association).
+    
+    **Requer:** Ser superusuário
+    """
+    stats = membership_service.migrate_legacy_associations_to_memberships(
+        db=db,
+        company_id=company_id
+    )
+    
+    return {
+        "message": "Migração concluída",
+        "stats": stats
+    }
 
 
 @router.get("/{user_id}/companies/{company_id}/permissions")
