@@ -5,9 +5,10 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.models.user import User
+from app.models.process import ProcessType
 from app.schemas.process import (
     ProcessCreate, ProcessUpdate, ProcessResponse, ProcessSummary,
-    ProcessTypeEnum
+    ProcessTypeEnum, ProcessUpdateFromMagazinesResponse
 )
 from app.security.auth import get_current_user
 from app.services.process_service import process_service
@@ -225,4 +226,55 @@ def get_company_process_by_number(
         db, company_id, process_number, current_user
     )
     
-    return ProcessResponse.model_validate(process) 
+    return ProcessResponse.model_validate(process)
+
+
+@router.post("/{company_id}/processes/update-from-magazines/", response_model=ProcessUpdateFromMagazinesResponse)
+def update_company_processes_from_magazines(
+    company_id: UUID = Path(..., description="ID da empresa"),
+    process_type: Optional[ProcessTypeEnum] = Query(None, description="Tipo de processo a atualizar (opcional, se não especificado atualiza todos)"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    **Atualizar processos da empresa a partir das últimas revistas RPI**
+    
+    🚀 **Funcionalidade:**
+    - Verifica se temos a última revista lançada baixada e usada
+    - Se não tiver, baixa a revista e cria registro no banco
+    - Atualiza status dos processos que precisam de atualização
+    - Associa cada processo à revista usada para rastreamento
+    
+    **Parâmetros:**
+    - `process_type` (opcional): Se especificado, atualiza apenas processos desse tipo.
+      Se não especificado, atualiza todos os tipos de processos da empresa.
+    
+    **Tipos suportados:**
+    - `BRAND` - Marcas
+    - `PATENT` - Patentes
+    - `DESIGN` - Desenhos Industriais
+    - `SOFTWARE` - Programas de Computador
+    
+    **Resposta:**
+    Retorna um resumo das atualizações realizadas, incluindo:
+    - Total de processos verificados
+    - Quantos foram atualizados
+    - Quantas novas revistas foram baixadas
+    - Detalhes por tipo de processo
+    
+    **Exemplo de uso:**
+    - Atualizar todos os processos: `POST /companies/{id}/processes/update-from-magazines/`
+    - Atualizar apenas marcas: `POST /companies/{id}/processes/update-from-magazines/?process_type=BRAND`
+    """
+    # Converter ProcessTypeEnum para ProcessType se fornecido
+    proc_type = None
+    if process_type:
+        proc_type = ProcessType(process_type.value)
+    
+    # Usar ProcessService para atualizar processos
+    result = process_service.update_company_processes_by_type_from_latest_magazines(
+        db, company_id, current_user, proc_type
+    )
+    
+    # Converter para o schema de resposta (FastAPI valida automaticamente)
+    return ProcessUpdateFromMagazinesResponse(**result) 

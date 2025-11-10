@@ -1,6 +1,6 @@
 from typing import List, Optional, Dict, Any
 from uuid import UUID
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -8,7 +8,10 @@ from app.models.process import Process, ProcessType
 from app.models.user import User
 from app.schemas.process import ProcessCreate, ProcessUpdate, ProcessSummary
 from app.crud import process as crud_process
+from app.crud.crud_rpi_magazine import rpi_magazine as crud_rpi_magazine
 from app.services.access_control_service import access_control_service
+from app.services.scraping_service import scraping_service
+from app.services import pdf_reader
 
 
 class ProcessService:
@@ -486,6 +489,381 @@ class ProcessService:
         
         # Deletar processo
         crud_process.delete(db, id=process_id)
+    
+    def update_all_company_processes_from_latest_magazines(
+        self,
+        db: Session,
+        company_id: UUID,
+        user: User
+    ) -> Dict[str, Any]:
+        """
+        Buscar atualizações de todos os processos da empresa.
+        
+        Verifica se estamos com a última revista lançada baixada e usada.
+        Se não estiver, baixa e atualiza status que sejam necessários.
+        
+        Args:
+            db: Sessão do banco
+            company_id: ID da empresa
+            user: Usuário executando a operação
+            
+        Returns:
+            Dict com resumo das atualizações realizadas
+        """
+        # Validar acesso à empresa
+        company = access_control_service.validate_company_access(
+            db, user, company_id, "update_processes"
+        )
+        
+        # Buscar todos os processos da empresa
+        all_processes = crud_process.get_by_company(db, company_id=company_id, skip=0, limit=10000)
+        
+        if not all_processes:
+            return {
+                "company_id": str(company_id),
+                "total_processes": 0,
+                "updated_processes": 0,
+                "new_magazines": 0,
+                "by_type": {}
+            }
+        
+        # Agrupar processos por tipo
+        processes_by_type: Dict[ProcessType, List[Process]] = {}
+        for process in all_processes:
+            if process.process_type not in processes_by_type:
+                processes_by_type[process.process_type] = []
+            processes_by_type[process.process_type].append(process)
+        
+        # Resultado agregado
+        result = {
+            "company_id": str(company_id),
+            "total_processes": len(all_processes),
+            "updated_processes": 0,
+            "new_magazines": 0,
+            "by_type": {}
+        }
+        
+        # Para cada tipo de processo
+        for process_type, processes in processes_by_type.items():
+            type_result = {
+                "process_type": process_type.value,
+                "total": len(processes),
+                "updated": 0,
+                "magazine_created": False,
+                "magazine_identifier": None
+            }
+            
+            try:
+                # Buscar links das últimas revistas disponíveis
+                links = scraping_service._get_latest_links()
+                latest_url = links.get(process_type)
+                
+                if not latest_url:
+                    type_result["error"] = "Tipo de processo não suportado"
+                    result["by_type"][process_type.value] = type_result
+                    continue
+                
+                # Extrair identificador da última revista
+                latest_identifier = scraping_service._extract_magazine_identifier(latest_url)
+                
+                # Verificar se já temos essa revista no banco
+                existing_magazine = crud_rpi_magazine.get_by_type_and_identifier(
+                    db, process_type, latest_identifier
+                )
+                
+                # Se não temos, baixar e criar registro
+                if not existing_magazine:
+                    # Buscar soup para extrair data de publicação
+                    import requests
+                    from bs4 import BeautifulSoup
+                    response = requests.get(scraping_service.BASE_URL)
+                    soup = BeautifulSoup(response.content, 'html.parser')
+                    
+                    # Criar registro da revista
+                    magazine, created = scraping_service.get_or_create_magazine(
+                        db, process_type, latest_url, soup
+                    )
+                    type_result["magazine_created"] = created
+                    type_result["magazine_identifier"] = magazine.magazine_identifier
+                    result["new_magazines"] += 1
+                else:
+                    magazine = existing_magazine
+                    type_result["magazine_identifier"] = magazine.magazine_identifier
+                    
+                    # OTIMIZAÇÃO: Se a revista já foi processada e todos os processos já estão atualizados,
+                    # pular o processamento para economizar tempo e recursos
+                    if magazine.processed_at is not None:
+                        # Verificar se todos os processos desse tipo já estão associados a essa revista
+                        processes_not_updated = [
+                            p for p in processes 
+                            if p.magazine_id != magazine.id
+                        ]
+                        
+                        if not processes_not_updated:
+                            # Todos os processos já estão atualizados com essa revista
+                            type_result["skipped"] = True
+                            type_result["message"] = "Revista já processada e todos os processos já estão atualizados"
+                            result["by_type"][process_type.value] = type_result
+                            continue
+                
+                # Baixar PDF (se ainda não tiver sido baixado)
+                pdf_path = scraping_service._download_pdf(latest_url)
+                
+                try:
+                    # Atualizar processos desse tipo
+                    for process in processes:
+                        try:
+                            # Buscar dados do processo no PDF
+                            if process_type == ProcessType.BRAND:
+                                data = pdf_reader.search_status_marcas(process.process_number, pdf_path)
+                            elif process_type == ProcessType.PATENT:
+                                data = pdf_reader.search_status_patentes(process.process_number, pdf_path)
+                            elif process_type == ProcessType.DESIGN:
+                                data = pdf_reader.search_status_desenhos_industriais(process.process_number, pdf_path)
+                            elif process_type == ProcessType.SOFTWARE:
+                                data = pdf_reader.search_status_programa_de_computador(process.process_number, pdf_path)
+                            else:
+                                data = None
+                            
+                            if data:
+                                # Verificar se precisa atualizar
+                                status_novo = data.get('status')
+                                update_data = {}
+                                
+                                if status_novo and status_novo != process.status:
+                                    update_data['status'] = status_novo
+                                
+                                # Sempre atualizar magazine_id se diferente
+                                if process.magazine_id != magazine.id:
+                                    update_data['magazine_id'] = magazine.id
+                                
+                                if update_data:
+                                    crud_process.update(
+                                        db, 
+                                        db_obj=process, 
+                                        obj_in=ProcessUpdate(**update_data)
+                                    )
+                                    type_result["updated"] += 1
+                                    result["updated_processes"] += 1
+                        except Exception as e:
+                            # Continuar com próximo processo em caso de erro
+                            print(f"[ERROR] Erro ao atualizar processo {process.process_number}: {e}")
+                            continue
+                    
+                    # Atualizar processed_at da revista
+                    from app.schemas.rpi_magazine import RPIMagazineUpdate
+                    crud_rpi_magazine.update(
+                        db,
+                        db_obj=magazine,
+                        obj_in=RPIMagazineUpdate(processed_at=datetime.now(timezone.utc))
+                    )
+                    
+                finally:
+                    # Remover PDF após processamento
+                    scraping_service._remove_pdf(pdf_path)
+                
+            except Exception as e:
+                type_result["error"] = str(e)
+                print(f"[ERROR] Erro ao processar tipo {process_type.value}: {e}")
+            
+            result["by_type"][process_type.value] = type_result
+        
+        return result
+    
+    def update_company_processes_by_type_from_latest_magazines(
+        self,
+        db: Session,
+        company_id: UUID,
+        user: User,
+        process_type: Optional[ProcessType] = None
+    ) -> Dict[str, Any]:
+        """
+        Buscar atualizações de processos da empresa por tipo específico.
+        
+        Se process_type for None, atualiza todos os tipos (comportamento igual a 
+        update_all_company_processes_from_latest_magazines).
+        
+        Args:
+            db: Sessão do banco
+            company_id: ID da empresa
+            user: Usuário executando a operação
+            process_type: Tipo de processo a atualizar (opcional, se None atualiza todos)
+            
+        Returns:
+            Dict com resumo das atualizações realizadas
+        """
+        # Validar acesso à empresa
+        company = access_control_service.validate_company_access(
+            db, user, company_id, "update_processes"
+        )
+        
+        # Buscar processos da empresa
+        if process_type:
+            # Buscar apenas processos do tipo especificado
+            all_processes = crud_process.get_by_company_and_type(
+                db, company_id=company_id, process_type=process_type.value, skip=0, limit=10000
+            )
+        else:
+            # Buscar todos os processos
+            all_processes = crud_process.get_by_company(db, company_id=company_id, skip=0, limit=10000)
+        
+        if not all_processes:
+            return {
+                "company_id": str(company_id),
+                "process_type": process_type.value if process_type else "ALL",
+                "total_processes": 0,
+                "updated_processes": 0,
+                "new_magazines": 0,
+                "by_type": {}
+            }
+        
+        # Agrupar processos por tipo
+        processes_by_type: Dict[ProcessType, List[Process]] = {}
+        for process in all_processes:
+            if process.process_type not in processes_by_type:
+                processes_by_type[process.process_type] = []
+            processes_by_type[process.process_type].append(process)
+        
+        # Se process_type foi especificado, filtrar apenas esse tipo
+        if process_type:
+            processes_by_type = {process_type: processes_by_type.get(process_type, [])}
+        
+        # Resultado agregado
+        result = {
+            "company_id": str(company_id),
+            "process_type": process_type.value if process_type else "ALL",
+            "total_processes": len(all_processes),
+            "updated_processes": 0,
+            "new_magazines": 0,
+            "by_type": {}
+        }
+        
+        # Para cada tipo de processo
+        for proc_type, processes in processes_by_type.items():
+            type_result = {
+                "process_type": proc_type.value,
+                "total": len(processes),
+                "updated": 0,
+                "magazine_created": False,
+                "magazine_identifier": None
+            }
+            
+            try:
+                # Buscar links das últimas revistas disponíveis
+                links = scraping_service._get_latest_links()
+                latest_url = links.get(proc_type)
+                
+                if not latest_url:
+                    type_result["error"] = "Tipo de processo não suportado"
+                    result["by_type"][proc_type.value] = type_result
+                    continue
+                
+                # Extrair identificador da última revista
+                latest_identifier = scraping_service._extract_magazine_identifier(latest_url)
+                
+                # Verificar se já temos essa revista no banco
+                existing_magazine = crud_rpi_magazine.get_by_type_and_identifier(
+                    db, proc_type, latest_identifier
+                )
+                
+                # Se não temos, baixar e criar registro
+                if not existing_magazine:
+                    # Buscar soup para extrair data de publicação
+                    import requests
+                    from bs4 import BeautifulSoup
+                    response = requests.get(scraping_service.BASE_URL)
+                    soup = BeautifulSoup(response.content, 'html.parser')
+                    
+                    # Criar registro da revista
+                    magazine, created = scraping_service.get_or_create_magazine(
+                        db, proc_type, latest_url, soup
+                    )
+                    type_result["magazine_created"] = created
+                    type_result["magazine_identifier"] = magazine.magazine_identifier
+                    result["new_magazines"] += 1
+                else:
+                    magazine = existing_magazine
+                    type_result["magazine_identifier"] = magazine.magazine_identifier
+                    
+                    # OTIMIZAÇÃO: Se a revista já foi processada e todos os processos já estão atualizados,
+                    # pular o processamento para economizar tempo e recursos
+                    if magazine.processed_at is not None:
+                        # Verificar se todos os processos desse tipo já estão associados a essa revista
+                        processes_not_updated = [
+                            p for p in processes 
+                            if p.magazine_id != magazine.id
+                        ]
+                        
+                        if not processes_not_updated:
+                            # Todos os processos já estão atualizados com essa revista
+                            type_result["skipped"] = True
+                            type_result["message"] = "Revista já processada e todos os processos já estão atualizados"
+                            result["by_type"][proc_type.value] = type_result
+                            continue
+                
+                # Baixar PDF (se ainda não tiver sido baixado)
+                pdf_path = scraping_service._download_pdf(latest_url)
+                
+                try:
+                    # Atualizar processos desse tipo
+                    for process in processes:
+                        try:
+                            # Buscar dados do processo no PDF
+                            if proc_type == ProcessType.BRAND:
+                                data = pdf_reader.search_status_marcas(process.process_number, pdf_path)
+                            elif proc_type == ProcessType.PATENT:
+                                data = pdf_reader.search_status_patentes(process.process_number, pdf_path)
+                            elif proc_type == ProcessType.DESIGN:
+                                data = pdf_reader.search_status_desenhos_industriais(process.process_number, pdf_path)
+                            elif proc_type == ProcessType.SOFTWARE:
+                                data = pdf_reader.search_status_programa_de_computador(process.process_number, pdf_path)
+                            else:
+                                data = None
+                            
+                            if data:
+                                # Verificar se precisa atualizar
+                                status_novo = data.get('status')
+                                update_data = {}
+                                
+                                if status_novo and status_novo != process.status:
+                                    update_data['status'] = status_novo
+                                
+                                # Sempre atualizar magazine_id se diferente
+                                if process.magazine_id != magazine.id:
+                                    update_data['magazine_id'] = magazine.id
+                                
+                                if update_data:
+                                    crud_process.update(
+                                        db, 
+                                        db_obj=process, 
+                                        obj_in=ProcessUpdate(**update_data)
+                                    )
+                                    type_result["updated"] += 1
+                                    result["updated_processes"] += 1
+                        except Exception as e:
+                            # Continuar com próximo processo em caso de erro
+                            print(f"[ERROR] Erro ao atualizar processo {process.process_number}: {e}")
+                            continue
+                    
+                    # Atualizar processed_at da revista
+                    from app.schemas.rpi_magazine import RPIMagazineUpdate
+                    crud_rpi_magazine.update(
+                        db,
+                        db_obj=magazine,
+                        obj_in=RPIMagazineUpdate(processed_at=datetime.now(timezone.utc))
+                    )
+                    
+                finally:
+                    # Remover PDF após processamento
+                    scraping_service._remove_pdf(pdf_path)
+                
+            except Exception as e:
+                type_result["error"] = str(e)
+                print(f"[ERROR] Erro ao processar tipo {proc_type.value}: {e}")
+            
+            result["by_type"][proc_type.value] = type_result
+        
+        return result
 
 
 # Instância global para uso nos endpoints

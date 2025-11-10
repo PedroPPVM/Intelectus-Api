@@ -66,9 +66,13 @@ class Process(Base):
     status = Column(String(1000), nullable=False)
     situation = Column(Enum(ProcessSituation, name="processsituation", native_enum=True), nullable=True)  # Situação mais específica
     
+    # Relacionamento com revista RPI
+    magazine_id = Column(UUID(as_uuid=True), ForeignKey("rpi_magazine.id"), nullable=True, index=True)
+    
     # Relacionamentos
     company = relationship("Company", back_populates="processes")
     alerts = relationship("Alert", back_populates="process")
+    magazine = relationship("RPIMagazine", back_populates="processes")
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
