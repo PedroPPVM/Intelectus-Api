@@ -368,7 +368,15 @@ class AlertService:
         message = "\n".join(message_parts)
         
         # Criar alerta para cada usuário da empresa
-        logger.debug(f"Criando alertas para {len(user_ids_to_notify)} usuários")
+        # Remover duplicatas de user_ids (caso haja usuários duplicados entre memberships e associação legada)
+        user_ids_to_notify = list(set(user_ids_to_notify))
+        logger.debug(f"Criando alertas para {len(user_ids_to_notify)} usuários únicos")
+        
+        # Log de stack trace para identificar de onde está sendo chamado
+        import traceback
+        call_stack = ''.join(traceback.format_stack()[-5:-1])  # Últimas 4 chamadas antes desta
+        logger.debug(f"📞 create_process_update_alert chamado de:\n{call_stack}")
+        
         for user_id in user_ids_to_notify:
             try:
                 logger.debug(f"Criando alerta para usuário {user_id}")

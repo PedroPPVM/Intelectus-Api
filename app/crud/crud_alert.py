@@ -139,8 +139,16 @@ class CRUDAlert:
     ) -> Alert:
         """
         Atualizar um alerta existente.
+        
+        Se is_dismissed for marcado como True, também marca como read.
         """
         update_data = obj_in.dict(exclude_unset=True)
+        
+        # Se está marcando como dismissed, também marcar como read
+        if update_data.get('is_dismissed') is True and not db_obj.is_read:
+            update_data['is_read'] = True
+            if 'read_at' not in update_data:
+                update_data['read_at'] = datetime.utcnow()
         
         for field, value in update_data.items():
             setattr(db_obj, field, value)
@@ -166,10 +174,17 @@ class CRUDAlert:
     def mark_as_dismissed(self, db: Session, *, id: UUID) -> Optional[Alert]:
         """
         Marcar alerta como descartado.
+        
+        Quando um alerta é descartado, também é marcado como lido,
+        pois se o usuário descartou, significa que ele leu.
         """
         obj = db.query(Alert).filter(Alert.id == id).first()
         if obj:
             obj.is_dismissed = True
+            # Se descartou, também leu
+            if not obj.is_read:
+                obj.is_read = True
+                obj.read_at = datetime.utcnow()
             db.add(obj)
             db.commit()
             db.refresh(obj)
