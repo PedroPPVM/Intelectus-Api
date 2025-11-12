@@ -119,7 +119,7 @@ def create_application() -> FastAPI:
         allowed_origins = ["*"]
     else:
         # Em produção sem configuração, bloquear todas (segurança)
-        allowed_origins = []
+        allowed_origins = ["https://intelectus-web.vercel.app/"]
     
     app.add_middleware(
         CORSMiddleware,
