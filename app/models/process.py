@@ -69,6 +69,10 @@ class Process(Base):
     # Relacionamento com revista RPI
     magazine_id = Column(UUID(as_uuid=True), ForeignKey("rpi_magazine.id"), nullable=True, index=True)
     
+    # Data de publicação da revista que atualizou o status
+    # Armazena a publication_date da revista para acesso rápido sem JOIN
+    magazine_publication_date = Column(Date, nullable=True)
+    
     # Flag para indicar se o processo foi editado manualmente
     # True = editado manualmente (precisa ser reprocessado)
     # False = atualizado via scraping (pode pular processamento se revista já processada)

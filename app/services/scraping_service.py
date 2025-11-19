@@ -245,6 +245,7 @@ class ScrapingService:
             # Sempre atualizar magazine_id para rastrear qual revista foi usada
             if proc.magazine_id != magazine.id:
                 update_data['magazine_id'] = magazine.id
+                update_data['magazine_publication_date'] = magazine.publication_date
             
             # Marcar como não editado (atualizado via scraping)
             # Sempre marcar como False quando atualizado via scraping

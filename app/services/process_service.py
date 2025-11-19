@@ -158,7 +158,8 @@ class ProcessService:
                 deposit_date=process.deposit_date,
                 concession_date=process.concession_date,
                 validity_date=process.validity_date,
-                situation=process.situation
+                situation=process.situation,
+                magazine_publication_date=process.magazine_publication_date
             )
             
             summaries.append(summary)
@@ -695,6 +696,7 @@ class ProcessService:
                                 if process.magazine_id != magazine.id:
                                     has_any_change = True
                                     update_data['magazine_id'] = magazine.id
+                                    update_data['magazine_publication_date'] = magazine.publication_date
                                 
                                 # Verificar se is_edited precisa ser atualizado (sempre marcar como False quando atualizado via scraping)
                                 if process.is_edited:
@@ -980,6 +982,7 @@ class ProcessService:
                                 if process.magazine_id != magazine.id:
                                     has_any_change = True
                                     update_data['magazine_id'] = magazine.id
+                                    update_data['magazine_publication_date'] = magazine.publication_date
                                 
                                 # Verificar se is_edited precisa ser atualizado (sempre marcar como False quando atualizado via scraping)
                                 if process.is_edited:

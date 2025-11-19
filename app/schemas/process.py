@@ -54,6 +54,9 @@ class ProcessBase(BaseModel):
     # Status e situação
     status: str = Field(default="PENDING", example="ativo")
     situation: Optional[ProcessSituationEnum] = Field(None, example=ProcessSituationEnum.PUBLISHED)
+    
+    # Data de publicação da revista que atualizou o status
+    magazine_publication_date: Optional[date] = Field(None, description="Data de publicação da revista RPI que atualizou o status")
 
 
 class ProcessCreate(ProcessBase):
@@ -99,6 +102,7 @@ class ProcessUpdate(BaseModel):
     status: Optional[str] = None
     situation: Optional[ProcessSituationEnum] = None
     magazine_id: Optional[UUID] = None
+    magazine_publication_date: Optional[date] = None
     is_edited: Optional[bool] = Field(None, description="Flag para indicar se foi editado manualmente")
 
 
@@ -169,6 +173,7 @@ class ProcessSummary(BaseModel):
     validity_date: Optional[date] = Field(None, example="2034-01-15")
     depositor: Optional[str] = Field(None, example="INTELECTUS CONSULTORIA LTDA")
     company_id: UUID = Field(..., example="987fcdeb-51a2-43d1-b123-456789abcdef")
+    magazine_publication_date: Optional[date] = Field(None, example="2024-11-15")
     created_at: datetime
     
     class Config:
