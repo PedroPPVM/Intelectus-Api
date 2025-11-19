@@ -11,7 +11,7 @@ from app.schemas.process import ProcessCreate, ProcessUpdate, ProcessSummary
 from app.crud import process as crud_process
 from app.crud.crud_rpi_magazine import rpi_magazine as crud_rpi_magazine
 from app.services.access_control_service import access_control_service
-from app.services.scraping_service import scraping_service
+from app.services.scraping_service import scraping_service, BASE_URL
 from app.services.alert_service import alert_service
 from app.services import pdf_reader
 
@@ -279,20 +279,6 @@ class ProcessService:
         new_status = update_dict.get('status', old_status)
         has_status_change = 'status' in update_dict and old_status != new_status
         
-        # Se há mudança de status, verificar se está de acordo com a última revista
-        should_create_alert = False
-        if has_status_change:
-            # Verificar se o status editado manualmente está de acordo com a última revista
-            status_matches_magazine = self._verify_status_against_latest_magazine(
-                db, process, new_status
-            )
-            
-            if status_matches_magazine:
-                should_create_alert = True
-                logger.info("Status editado manualmente está de acordo com a última revista RPI")
-            else:
-                logger.warning(f"Status editado manualmente ({new_status}) não está de acordo com a última revista RPI. Alerta não será criado.")
-        
         # Se há mudança de status ou outros campos, marcar como editado manualmente
         # Mas só se is_edited não foi explicitamente definido no update_data
         if update_dict and 'is_edited' not in update_dict:
@@ -306,8 +292,8 @@ class ProcessService:
         # Recarregar processo atualizado do banco para ter dados atualizados
         db.refresh(updated_process)
         
-        # Criar alertas apenas se status está de acordo com a revista
-        if should_create_alert:
+        # Criar alertas se houve mudança de status
+        if has_status_change:
             update_details = {}
             
             # Criar alertas para todos os usuários da empresa
@@ -327,114 +313,6 @@ class ProcessService:
                 logger.debug(f"Traceback: {traceback.format_exc()}")
         
         return updated_process
-    
-    def _verify_status_against_latest_magazine(
-        self,
-        db: Session,
-        process: Process,
-        edited_status: str
-    ) -> bool:
-        """
-        Verificar se o status editado manualmente está de acordo com a última revista RPI.
-        
-        Args:
-            db: Sessão do banco
-            process: Processo sendo atualizado
-            edited_status: Status que o usuário está tentando definir
-            
-        Returns:
-            bool: True se o status está de acordo com a última revista, False caso contrário
-        """
-        try:
-            # Buscar links das últimas revistas disponíveis
-            links = scraping_service._get_latest_links()
-            latest_url = links.get(process.process_type)
-            
-            if not latest_url:
-                # Tipo de processo não suportado, permitir atualização
-                logger.info(f"Tipo de processo {process.process_type.value} não suportado para verificação")
-                return True
-            
-            # Extrair identificador da última revista
-            latest_identifier = scraping_service._extract_magazine_identifier(latest_url)
-            
-            # Verificar se já temos essa revista no banco
-            existing_magazine = crud_rpi_magazine.get_by_type_and_identifier(
-                db, process.process_type, latest_identifier
-            )
-            
-            # Se não temos a revista, precisamos baixar e verificar
-            if not existing_magazine:
-                # Baixar PDF temporariamente para verificar
-                pdf_path = scraping_service._download_pdf(latest_url)
-                try:
-                    # Buscar status do processo na última revista
-                    if process.process_type == ProcessType.BRAND:
-                        data = pdf_reader.search_status_marcas(process.process_number, pdf_path)
-                    elif process.process_type == ProcessType.PATENT:
-                        data = pdf_reader.search_status_patentes(process.process_number, pdf_path)
-                    elif process.process_type == ProcessType.DESIGN:
-                        data = pdf_reader.search_status_desenhos_industriais(process.process_number, pdf_path)
-                    elif process.process_type == ProcessType.SOFTWARE:
-                        data = pdf_reader.search_status_programa_de_computador(process.process_number, pdf_path)
-                    else:
-                        data = None
-                    
-                    if data:
-                        magazine_status = data.get('status')
-                        # Comparar status editado com status da revista (case-insensitive)
-                        matches = magazine_status and magazine_status.strip().lower() == edited_status.strip().lower()
-                        logger.info(f"Comparação de status - Revista: {magazine_status}, Editado: {edited_status}, Match: {matches}")
-                        return matches
-                    else:
-                        # Processo não encontrado na revista, permitir atualização
-                        logger.info(f"Processo {process.process_number} não encontrado na última revista")
-                        return True
-                finally:
-                    scraping_service._remove_pdf(pdf_path)
-            else:
-                # Temos a revista no banco, verificar se o processo já foi atualizado com ela
-                if process.magazine_id == existing_magazine.id:
-                    # Processo já está associado à última revista, verificar se status atual está de acordo
-                    # Se o status editado é diferente do atual, pode ser uma atualização legítima
-                    # Neste caso, vamos permitir (assumindo que o usuário sabe o que está fazendo)
-                    logger.info("Processo já associado à última revista. Permitindo atualização manual.")
-                    return True
-                else:
-                    # Processo não está atualizado com a última revista, verificar status na revista
-                    pdf_path = scraping_service._download_pdf(existing_magazine.url)
-                    try:
-                        # Buscar status do processo na última revista
-                        if process.process_type == ProcessType.BRAND:
-                            data = pdf_reader.search_status_marcas(process.process_number, pdf_path)
-                        elif process.process_type == ProcessType.PATENT:
-                            data = pdf_reader.search_status_patentes(process.process_number, pdf_path)
-                        elif process.process_type == ProcessType.DESIGN:
-                            data = pdf_reader.search_status_desenhos_industriais(process.process_number, pdf_path)
-                        elif process.process_type == ProcessType.SOFTWARE:
-                            data = pdf_reader.search_status_programa_de_computador(process.process_number, pdf_path)
-                        else:
-                            data = None
-                        
-                        if data:
-                            magazine_status = data.get('status')
-                            # Comparar status editado com status da revista (case-insensitive)
-                            matches = magazine_status and magazine_status.strip().lower() == edited_status.strip().lower()
-                            logger.info(f"Comparação de status - Revista: {magazine_status}, Editado: {edited_status}, Match: {matches}")
-                            return matches
-                        else:
-                            # Processo não encontrado na revista, permitir atualização
-                            logger.info(f"Processo {process.process_number} não encontrado na última revista")
-                            return True
-                    finally:
-                        scraping_service._remove_pdf(pdf_path)
-        except Exception as e:
-            # Em caso de erro na verificação, permitir atualização (não bloquear)
-            import traceback
-            logger.warning(f"Erro ao verificar status contra revista: {e}")
-            logger.debug(f"Traceback: {traceback.format_exc()}")
-            logger.warning("Permitindo atualização manual apesar do erro")
-            return True
     
     def mark_process_scraped_with_audit(
         self,
@@ -745,7 +623,7 @@ class ProcessService:
                     # Buscar soup para extrair data de publicação
                     import requests
                     from bs4 import BeautifulSoup
-                    response = requests.get(scraping_service.BASE_URL)
+                    response = requests.get(BASE_URL)
                     soup = BeautifulSoup(response.content, 'html.parser')
                     
                     # Criar registro da revista
@@ -1030,7 +908,7 @@ class ProcessService:
                     # Buscar soup para extrair data de publicação
                     import requests
                     from bs4 import BeautifulSoup
-                    response = requests.get(scraping_service.BASE_URL)
+                    response = requests.get(BASE_URL)
                     soup = BeautifulSoup(response.content, 'html.parser')
                     
                     # Criar registro da revista
