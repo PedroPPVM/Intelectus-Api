@@ -413,19 +413,6 @@ class ProcessService:
                     detail="Data de depósito não pode ser posterior à data de concessão"
                 )
         
-        # Validação de depositante obrigatório
-        if (hasattr(process_data, 'depositor') and 
-            hasattr(process_data, 'cnpj_depositor') and 
-            hasattr(process_data, 'cpf_depositor')):
-            
-            if (not process_data.depositor and 
-                not process_data.cnpj_depositor and 
-                not process_data.cpf_depositor):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="É necessário informar pelo menos nome do depositante, CNPJ ou CPF"
-                )
-        
         return True
     
     def get_process_statistics_summary(
