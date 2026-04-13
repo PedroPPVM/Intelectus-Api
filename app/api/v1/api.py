@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import auth, users, companies, processes, alerts, memberships, company_processes
+from app.api.v1.endpoints import auth, users, companies, processes, alerts, memberships, company_processes, inpi
 
 
 api_router = APIRouter()
@@ -15,7 +15,10 @@ api_router.include_router(memberships.router, prefix="/memberships", tags=["memb
 
 # Endpoints orientados a company - Roadmap Fase 3.1.2
 api_router.include_router(
-    company_processes.router, 
-    prefix="/companies", 
+    company_processes.router,
+    prefix="/companies",
     tags=["company-processes"]
-) 
+)
+
+# Consultas INPI pePI
+api_router.include_router(inpi.router, prefix="/inpi", tags=["inpi"]) 

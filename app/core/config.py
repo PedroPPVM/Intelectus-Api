@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     
     # INPI Scraping
     rpi_base_url: str = Field(default="https://revistas.inpi.gov.br", env="RPI_BASE_URL")
+    pepi_base_url: str = Field(default="https://busca.inpi.gov.br/pePI", env="PEPI_BASE_URL")
     
     class Config:
         env_file = ".env"

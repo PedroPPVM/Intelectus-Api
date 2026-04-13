@@ -8,3 +8,4 @@ from app.services.access_control_service import access_control_service
 from app.services.process_service import process_service
 from app.services.company_service import company_service
 from app.services.alert_service import alert_service
+from app.services.inpi_pepi_service import inpi_pepi_service
