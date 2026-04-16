@@ -163,6 +163,139 @@ class InpiPepiService:
         logger.info(f"✅ Consulta concluída para processo {process_number}: Marca={data.get('marca')}, Situação={data.get('situacao')}")
         return data
 
+    # ====================== PATENTES ======================
+
+    def _load_patente_search_page(self, session: requests.Session) -> None:
+        """
+        Carrega a página de busca de patentes (PatenteSearchBasico.jsp).
+
+        O portal pePI exige que o usuário passe pela página do formulário
+        antes de submeter a busca, caso contrário a sessão é redirecionada
+        de volta para o login.
+        """
+        search_page_url = f"{settings.pepi_base_url}/jsp/patentes/PatenteSearchBasico.jsp"
+        logger.debug(f"Carregando página de busca de patentes: {search_page_url}")
+        response = session.get(search_page_url, allow_redirects=True, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+
+    def _search_patente(self, session: requests.Session, process_number: str) -> requests.Response:
+        """
+        Executa busca de patente por número de pedido (POST no form).
+
+        O formulário da página Basica usa Action=SearchBasico e espera o
+        número em NumPedido (formato com espaços, ex: "BR 10 2023 002986").
+        """
+        search_url = f"{settings.pepi_base_url}/servlet/PatenteServletController"
+        form_data = {
+            "NumPedido": process_number,
+            "NumGru": "",
+            "NumProtocolo": "",
+            "FormaPesquisa": "Todas",
+            "ExpressaoPesquisa": "",
+            "Coluna": "Titulo",
+            "RegisterPerPage": "20",
+            "Action": "SearchBasico",
+        }
+        logger.debug(f"Buscando patente com número: {process_number}")
+        response = session.post(search_url, data=form_data, allow_redirects=True, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        return response
+
+    def _parse_patente_search_results(self, content: bytes, process_number: str) -> str:
+        """
+        Encontra o CodPedido do processo na tabela de resultados.
+
+        A coluna "Pedido" possui um link do tipo:
+            <a href='...?Action=detail&CodPedido=1693529&...'>BR 10 2023 002986 8</a>
+        """
+        soup = BeautifulSoup(content, "html.parser", from_encoding="iso-8859-1")
+
+        for link in soup.find_all("a", href=True):
+            href = link["href"]
+            if "Action=detail" in href and "CodPedido=" in href:
+                match = re.search(r"CodPedido=(\d+)", href)
+                if match:
+                    cod_pedido = match.group(1)
+                    logger.info(f"✅ Patente {process_number} encontrada (CodPedido={cod_pedido})")
+                    return cod_pedido
+
+        raise ValueError(f"Patente {process_number} não encontrada nos resultados do INPI")
+
+    def _fetch_patente_detail_page(self, session: requests.Session, cod_pedido: str) -> requests.Response:
+        """Busca a página de detalhe da patente."""
+        detail_url = f"{settings.pepi_base_url}/servlet/PatenteServletController"
+        params = {
+            "Action": "detail",
+            "CodPedido": cod_pedido,
+        }
+        logger.debug(f"Acessando detalhe da patente (CodPedido={cod_pedido})")
+        response = session.get(detail_url, params=params, allow_redirects=True, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        return response
+
+    def _parse_patente_detail_page(self, content: bytes) -> Dict[str, Optional[str]]:
+        """
+        Extrai o 'Título' da página de detalhe da patente.
+
+        O label aparece no padrão WIPO como "(54)Título:" em um <td>,
+        com o valor no <td> irmão seguinte.
+        """
+        soup = BeautifulSoup(content, "html.parser", from_encoding="iso-8859-1")
+
+        title = None
+
+        for td in soup.find_all("td"):
+            text = td.get_text(strip=True)
+            # Label pode vir como "Título:" ou "(54)Título:"; aceita variantes de encoding.
+            if "tulo" in text.lower() and text.endswith(":"):
+                next_td = td.find_next_sibling("td")
+                if next_td:
+                    title = next_td.get_text(strip=True)
+                    break
+
+        logger.debug(f"Dados extraídos - Título: {title}")
+        return {"title": title}
+
+    def lookup_patente(self, process_number: str) -> Dict[str, Optional[str]]:
+        """
+        Consulta completa de patente no portal pePI do INPI.
+
+        Fluxo:
+        1. Login anônimo (JSESSIONID)
+        2. Carrega página de busca de patentes
+        3. POST do formulário de busca por número de pedido
+        4. Extrai CodPedido do link na coluna "Pedido"
+        5. Acessa página de detalhe
+        6. Extrai o Título
+
+        Args:
+            process_number: Número do pedido (ex: "BR 10 2023 002986")
+
+        Returns:
+            Dict com process_number e title
+
+        Raises:
+            ValueError: Patente não encontrada
+            requests.ConnectionError: INPI indisponível
+            requests.Timeout: Timeout na conexão
+        """
+        logger.info(f"🔍 Consultando patente no INPI pePI: {process_number}")
+
+        session = self._create_session()
+
+        self._login_anonymous(session)
+        self._load_patente_search_page(session)
+
+        search_response = self._search_patente(session, process_number)
+        cod_pedido = self._parse_patente_search_results(search_response.content, process_number)
+
+        detail_response = self._fetch_patente_detail_page(session, cod_pedido)
+        data = self._parse_patente_detail_page(detail_response.content)
+        data["process_number"] = process_number
+
+        logger.info(f"✅ Consulta concluída para patente {process_number}: Título={data.get('title')}")
+        return data
+
 
 # Instância singleton
 inpi_pepi_service = InpiPepiService()
