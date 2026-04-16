@@ -37,3 +37,22 @@ class PatenteLookupResponse(BaseModel):
                 "title": "MÉTODO DE EXTRAÇÃO E REAPROVEITAMENTO DO AMIDO DA BIOMASSA DE BAMBU NA INDÚSTRIA PRODUTORA DE POLPA CELULÓSICA E PAPEL"
             }
         }
+
+
+class ProgramaLookupResponse(BaseModel):
+    """
+    Schema de resposta para consulta de programa de computador no portal pePI do INPI.
+
+    O campo `title` corresponde ao "Título" extraído da página de detalhe
+    e é compatível com o campo `title` do schema Process.
+    """
+    process_number: str = Field(..., description="Número do processo consultado", example="BR 51 2026 002418-8")
+    title: Optional[str] = Field(None, description="Título do programa de computador", example="Motor de Avaliação de Riscos - MAR")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "process_number": "BR 51 2026 002418-8",
+                "title": "Motor de Avaliação de Riscos - MAR"
+            }
+        }

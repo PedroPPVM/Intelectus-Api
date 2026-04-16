@@ -296,6 +296,135 @@ class InpiPepiService:
         logger.info(f"✅ Consulta concluída para patente {process_number}: Título={data.get('title')}")
         return data
 
+    # ============== PROGRAMA DE COMPUTADOR ==============
+
+    def _load_programa_search_page(self, session: requests.Session) -> None:
+        """
+        Carrega a página de busca de programa de computador (ProgramaSearchBasico.jsp).
+
+        Igual ao fluxo de patente, o portal exige visita ao formulário
+        antes de submeter a busca, sob pena de redirecionar ao login.
+        """
+        search_page_url = f"{settings.pepi_base_url}/jsp/programas/ProgramaSearchBasico.jsp"
+        logger.debug(f"Carregando página de busca de programa: {search_page_url}")
+        response = session.get(search_page_url, allow_redirects=True, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+
+    def _search_programa(self, session: requests.Session, process_number: str) -> requests.Response:
+        """
+        Executa busca de programa de computador por número de pedido (POST no form).
+
+        O formulário usa Action=SearchBasico e espera o número no formato
+        com espaços e hífen (ex: "BR 51 2026 002418-8").
+        """
+        search_url = f"{settings.pepi_base_url}/servlet/ProgramaServletController"
+        form_data = {
+            "NumPedido": process_number,
+            "FormaPesquisa": "Todas",
+            "ExpressaoPesquisa": "",
+            "Coluna": "Titulo",
+            "RegisterPerPage": "20",
+            "Action": "SearchBasico",
+        }
+        logger.debug(f"Buscando programa com número: {process_number}")
+        response = session.post(search_url, data=form_data, allow_redirects=True, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        return response
+
+    def _parse_programa_search_results(self, content: bytes, process_number: str) -> str:
+        """
+        Encontra o CodPedido do programa na tabela de resultados.
+
+        A coluna "Pedido" possui um link do tipo:
+            <a href='...?Action=detail&CodPedido=57162&...'>BR 51 2026 002418 8</a>
+        """
+        soup = BeautifulSoup(content, "html.parser", from_encoding="iso-8859-1")
+
+        for link in soup.find_all("a", href=True):
+            href = link["href"]
+            if "Action=detail" in href and "CodPedido=" in href:
+                match = re.search(r"CodPedido=(\d+)", href)
+                if match:
+                    cod_pedido = match.group(1)
+                    logger.info(f"✅ Programa {process_number} encontrado (CodPedido={cod_pedido})")
+                    return cod_pedido
+
+        raise ValueError(f"Programa {process_number} não encontrado nos resultados do INPI")
+
+    def _fetch_programa_detail_page(self, session: requests.Session, cod_pedido: str) -> requests.Response:
+        """Busca a página de detalhe do programa de computador."""
+        detail_url = f"{settings.pepi_base_url}/servlet/ProgramaServletController"
+        params = {
+            "Action": "detail",
+            "CodPedido": cod_pedido,
+        }
+        logger.debug(f"Acessando detalhe do programa (CodPedido={cod_pedido})")
+        response = session.get(detail_url, params=params, allow_redirects=True, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        return response
+
+    def _parse_programa_detail_page(self, content: bytes) -> Dict[str, Optional[str]]:
+        """
+        Extrai o 'Título' da página de detalhe do programa de computador.
+
+        O label aparece como "Título:" em um <td>, com o valor no <td>
+        irmão seguinte.
+        """
+        soup = BeautifulSoup(content, "html.parser", from_encoding="iso-8859-1")
+
+        title = None
+
+        for td in soup.find_all("td"):
+            text = td.get_text(strip=True)
+            if "tulo" in text.lower() and text.endswith(":"):
+                next_td = td.find_next_sibling("td")
+                if next_td:
+                    title = next_td.get_text(strip=True)
+                    break
+
+        logger.debug(f"Dados extraídos - Título: {title}")
+        return {"title": title}
+
+    def lookup_programa(self, process_number: str) -> Dict[str, Optional[str]]:
+        """
+        Consulta completa de programa de computador no portal pePI do INPI.
+
+        Fluxo:
+        1. Login anônimo (JSESSIONID)
+        2. Carrega página de busca de programa
+        3. POST do formulário de busca por número de pedido
+        4. Extrai CodPedido do link na coluna "Pedido"
+        5. Acessa página de detalhe
+        6. Extrai o Título
+
+        Args:
+            process_number: Número do pedido (ex: "BR 51 2026 002418-8")
+
+        Returns:
+            Dict com process_number e title
+
+        Raises:
+            ValueError: Programa não encontrado
+            requests.ConnectionError: INPI indisponível
+            requests.Timeout: Timeout na conexão
+        """
+        logger.info(f"🔍 Consultando programa de computador no INPI pePI: {process_number}")
+
+        session = self._create_session()
+
+        self._login_anonymous(session)
+        self._load_programa_search_page(session)
+
+        search_response = self._search_programa(session, process_number)
+        cod_pedido = self._parse_programa_search_results(search_response.content, process_number)
+
+        detail_response = self._fetch_programa_detail_page(session, cod_pedido)
+        data = self._parse_programa_detail_page(detail_response.content)
+        data["process_number"] = process_number
+
+        logger.info(f"✅ Consulta concluída para programa {process_number}: Título={data.get('title')}")
+        return data
+
 
 # Instância singleton
 inpi_pepi_service = InpiPepiService()
