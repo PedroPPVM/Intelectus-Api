@@ -21,4 +21,4 @@ from app.schemas.membership import (
     BulkMembershipCreate, PermissionResponse, MembershipRoleEnum,
     MembershipPermissionEnum
 )
-from app.schemas.inpi import MarcaLookupResponse
+from app.schemas.inpi import MarcaLookupResponse, PatenteLookupResponse
