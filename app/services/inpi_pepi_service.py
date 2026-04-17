@@ -426,5 +426,139 @@ class InpiPepiService:
         return data
 
 
+    # ============== DESENHO INDUSTRIAL ==============
+
+    def _load_desenho_search_page(self, session: requests.Session) -> None:
+        """
+        Carrega a página de busca de desenho industrial (DesenhoSearchBasico.jsp).
+
+        Mesmo padrão de patente/programa: o portal exige visita ao formulário
+        antes de submeter a busca, sob pena de redirecionar ao login.
+        """
+        search_page_url = f"{settings.pepi_base_url}/jsp/desenhos/DesenhoSearchBasico.jsp"
+        logger.debug(f"Carregando página de busca de desenho: {search_page_url}")
+        response = session.get(search_page_url, allow_redirects=True, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+
+    def _search_desenho(self, session: requests.Session, process_number: str) -> requests.Response:
+        """
+        Executa busca de desenho industrial por número de pedido (POST no form).
+
+        O formulário usa Action=SearchBasico e aceita o número no formato
+        compacto com hífen (ex: "BR302025008066-5").
+        """
+        search_url = f"{settings.pepi_base_url}/servlet/DesenhoServletController"
+        form_data = {
+            "NumPedido": process_number,
+            "FormaPesquisa": "Todas",
+            "ExpressaoPesquisa": "",
+            "Coluna": "Titulo",
+            "RegisterPerPage": "20",
+            "Action": "SearchBasico",
+        }
+        logger.debug(f"Buscando desenho industrial com número: {process_number}")
+        response = session.post(search_url, data=form_data, allow_redirects=True, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        return response
+
+    def _parse_desenho_search_results(self, content: bytes, process_number: str) -> str:
+        """
+        Encontra o CodPedido do desenho na tabela de resultados.
+
+        A coluna "Pedido" possui um link do tipo:
+            <a href='...?Action=detail&CodPedido=1738519&...'>BR 30 2025 008066 5</a>
+        """
+        soup = BeautifulSoup(content, "html.parser", from_encoding="iso-8859-1")
+
+        for link in soup.find_all("a", href=True):
+            href = link["href"]
+            if "Action=detail" in href and "CodPedido=" in href:
+                match = re.search(r"CodPedido=(\d+)", href)
+                if match:
+                    cod_pedido = match.group(1)
+                    logger.info(f"✅ Desenho {process_number} encontrado (CodPedido={cod_pedido})")
+                    return cod_pedido
+
+        raise ValueError(f"Desenho industrial {process_number} não encontrado nos resultados do INPI")
+
+    def _fetch_desenho_detail_page(self, session: requests.Session, cod_pedido: str) -> requests.Response:
+        """Busca a página de detalhe do desenho industrial."""
+        detail_url = f"{settings.pepi_base_url}/servlet/DesenhoServletController"
+        params = {
+            "Action": "detail",
+            "CodPedido": cod_pedido,
+        }
+        logger.debug(f"Acessando detalhe do desenho (CodPedido={cod_pedido})")
+        response = session.get(detail_url, params=params, allow_redirects=True, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        return response
+
+    def _parse_desenho_detail_page(self, content: bytes) -> Dict[str, Optional[str]]:
+        """
+        Extrai a 'Descrição' da página de detalhe do desenho industrial.
+
+        A página possui vários <td> com texto "Descrição" (uma para o objeto,
+        outras para classificação de Locarno e despachos). A primeira ocorrência
+        exata é a descrição do objeto (equivalente ao "título" do desenho).
+
+        O valor fica em um <td> de outra linha (não é sibling direto),
+        então usamos find_next('td') para pegar o próximo em ordem de documento.
+        """
+        soup = BeautifulSoup(content, "html.parser", from_encoding="iso-8859-1")
+
+        title = None
+
+        for td in soup.find_all("td"):
+            text = td.get_text(strip=True)
+            if text.lower() == "descrição":
+                next_td = td.find_next("td")
+                if next_td:
+                    title = next_td.get_text(strip=True)
+                    break
+
+        logger.debug(f"Dados extraídos - Descrição: {title}")
+        return {"title": title}
+
+    def lookup_desenho(self, process_number: str) -> Dict[str, Optional[str]]:
+        """
+        Consulta completa de desenho industrial no portal pePI do INPI.
+
+        Fluxo:
+        1. Login anônimo (JSESSIONID)
+        2. Carrega página de busca de desenho
+        3. POST do formulário de busca por número de pedido
+        4. Extrai CodPedido do link na coluna "Pedido"
+        5. Acessa página de detalhe
+        6. Extrai a Descrição (campo title)
+
+        Args:
+            process_number: Número do pedido (ex: "BR302025008066-5")
+
+        Returns:
+            Dict com process_number e title (Descrição extraída)
+
+        Raises:
+            ValueError: Desenho não encontrado
+            requests.ConnectionError: INPI indisponível
+            requests.Timeout: Timeout na conexão
+        """
+        logger.info(f"🔍 Consultando desenho industrial no INPI pePI: {process_number}")
+
+        session = self._create_session()
+
+        self._login_anonymous(session)
+        self._load_desenho_search_page(session)
+
+        search_response = self._search_desenho(session, process_number)
+        cod_pedido = self._parse_desenho_search_results(search_response.content, process_number)
+
+        detail_response = self._fetch_desenho_detail_page(session, cod_pedido)
+        data = self._parse_desenho_detail_page(detail_response.content)
+        data["process_number"] = process_number
+
+        logger.info(f"✅ Consulta concluída para desenho {process_number}: Descrição={data.get('title')}")
+        return data
+
+
 # Instância singleton
 inpi_pepi_service = InpiPepiService()

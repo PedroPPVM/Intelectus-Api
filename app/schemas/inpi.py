@@ -56,3 +56,22 @@ class ProgramaLookupResponse(BaseModel):
                 "title": "Motor de Avaliação de Riscos - MAR"
             }
         }
+
+
+class DesenhoLookupResponse(BaseModel):
+    """
+    Schema de resposta para consulta de desenho industrial no portal pePI do INPI.
+
+    O campo `title` corresponde à "Descrição" extraída da página de detalhe
+    e é compatível com o campo `title` do schema Process.
+    """
+    process_number: str = Field(..., description="Número do processo consultado", example="BR302025008066-5")
+    title: Optional[str] = Field(None, description="Descrição do desenho industrial", example="SUPORTE")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "process_number": "BR302025008066-5",
+                "title": "SUPORTE"
+            }
+        }

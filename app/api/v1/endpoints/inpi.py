@@ -3,7 +3,12 @@ from fastapi import APIRouter, Depends, HTTPException, status, Path
 from requests.exceptions import ConnectionError, Timeout, HTTPError
 
 from app.models.user import User
-from app.schemas.inpi import MarcaLookupResponse, PatenteLookupResponse, ProgramaLookupResponse
+from app.schemas.inpi import (
+    DesenhoLookupResponse,
+    MarcaLookupResponse,
+    PatenteLookupResponse,
+    ProgramaLookupResponse,
+)
 from app.security.auth import get_current_user
 from app.services.inpi_pepi_service import inpi_pepi_service
 
@@ -161,6 +166,60 @@ def lookup_programa(
         )
     except Exception as e:
         logger.error(f"❌ Erro inesperado na consulta pePI (programa): {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Erro interno ao consultar o INPI pePI.",
+        )
+
+
+@router.get(
+    "/desenho/{process_number:path}",
+    response_model=DesenhoLookupResponse,
+    summary="Consultar desenho industrial no INPI pePI",
+    description=(
+        "Consulta a descrição de um desenho industrial no portal pePI do INPI pelo número do pedido. "
+        "Aceita o número no formato compacto com hífen (ex: `BR302025008066-5`). "
+        "O campo `title` retornado é compatível com o campo `title` do schema Process."
+    ),
+)
+def lookup_desenho(
+    process_number: str = Path(
+        ...,
+        min_length=5,
+        max_length=40,
+        description="Número do pedido de desenho industrial (ex: 'BR302025008066-5')",
+        example="BR302025008066-5",
+    ),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Consultar dados de desenho industrial no portal pePI do INPI.
+
+    Retorna a Descrição do desenho extraída da página de detalhe,
+    mapeada para o campo `title` (compatível com o schema Process).
+    """
+    try:
+        result = inpi_pepi_service.lookup_desenho(process_number)
+        return DesenhoLookupResponse(**result)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+    except (ConnectionError, Timeout) as e:
+        logger.error(f"❌ Erro de conexão com INPI pePI (desenho): {e}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Não foi possível conectar ao portal INPI pePI. Tente novamente mais tarde.",
+        )
+    except HTTPError as e:
+        logger.error(f"❌ Erro HTTP do INPI pePI (desenho): {e}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="O portal INPI pePI retornou um erro. Tente novamente mais tarde.",
+        )
+    except Exception as e:
+        logger.error(f"❌ Erro inesperado na consulta pePI (desenho): {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Erro interno ao consultar o INPI pePI.",
