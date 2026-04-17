@@ -51,6 +51,10 @@ tags_metadata = [
         "name": "alerts",
         "description": "**Sistema de alertas.** Notificações sobre mudanças de status em processos de PI.",
     },
+    {
+        "name": "inpi",
+        "description": "**Consultas INPI pePI.** Endpoints para consultar informações diretamente no portal pePI do INPI.",
+    },
 ]
 
 
