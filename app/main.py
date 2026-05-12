@@ -150,6 +150,19 @@ def create_application() -> FastAPI:
     
     # Incluir roteadores da API
     app.include_router(api_router, prefix="/api/v1")
+
+    @app.on_event("startup")
+    def reconcile_batch_jobs() -> None:
+        # Jobs em RUNNING após restart indicam crash do worker — marcar como FAILED.
+        try:
+            from app.services.process_batch_service import process_batch_service
+            count = process_batch_service.reconcile_orphans()
+            if count:
+                app_logger.warning(
+                    f"Reconciliação inicial: {count} job(s) órfão(s) marcado(s) como FAILED"
+                )
+        except Exception as exc:
+            app_logger.error(f"Falha ao reconciliar jobs órfãos no startup: {exc}")
     
     # Rotas básicas
     @app.get(

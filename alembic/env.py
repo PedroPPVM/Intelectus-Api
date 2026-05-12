@@ -19,6 +19,7 @@ from app.models.company import Company
 from app.models.process import Process
 from app.models.alert import Alert
 from app.models.membership import UserCompanyMembership, MembershipHistory, UserCompanyPermission
+from app.models.process_batch_job import ProcessBatchJob, ProcessBatchJobItem
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

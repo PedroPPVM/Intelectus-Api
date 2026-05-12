@@ -1,17 +1,33 @@
-from typing import List, Optional
+from typing import List, Literal, Optional
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, status, Query, UploadFile
 from sqlalchemy.orm import Session
 
+from app.crud.crud_process_batch_job import process_batch_job as crud_batch_job
 from app.db.session import get_db
+from app.models.process_batch_job import BatchJobItemStatus
 from app.models.user import User
 from app.schemas.process import (
+    BatchJobItemsPage,
+    BatchJobStatusEnum,
+    BatchProcessItemResult,
+    BatchProcessJobAccepted,
+    BatchProcessJobResponse,
     ProcessCreate, ProcessUpdate, ProcessResponse, ProcessSummary,
     ProcessTypeEnum
 )
 from app.security.auth import get_current_user
 from app.services.process_service import process_service
+from app.services.process_batch_service import process_batch_service
 from app.services.access_control_service import access_control_service
+
+
+ALLOWED_CSV_CONTENT_TYPES = {
+    "text/csv",
+    "application/vnd.ms-excel",
+    "application/csv",
+    "application/octet-stream",
+}
 
 
 router = APIRouter()
@@ -246,4 +262,188 @@ def scrape_status_process(
         process_type=process.process_type,
         company_id=process.company_id
     )
-    return result 
+    return result
+
+
+_ITEM_STATUS_MAP = {
+    "pending": BatchJobItemStatus.PENDING,
+    "created": BatchJobItemStatus.CREATED,
+    "failed": BatchJobItemStatus.FAILED,
+}
+
+_ITEM_STATUS_OUT = {
+    BatchJobItemStatus.PENDING: "pending",
+    BatchJobItemStatus.CREATED: "created",
+    BatchJobItemStatus.FAILED: "failed",
+}
+
+
+def _build_status_url(job_id: UUID) -> str:
+    return f"/api/v1/processes/batch-jobs/{job_id}"
+
+
+def _build_items_url(job_id: UUID) -> str:
+    return f"/api/v1/processes/batch-jobs/{job_id}/items"
+
+
+@router.post(
+    "/batch-csv",
+    response_model=BatchProcessJobAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def create_processes_batch_csv(
+    background_tasks: BackgroundTasks,
+    company_id: UUID = Form(...),
+    process_type: ProcessTypeEnum = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Cria um job assíncrono para processar em lote um CSV de `process_number`.
+    Retorna 202 com `job_id`; cliente acompanha via `GET /batch-jobs/{job_id}`.
+    """
+    filename = (file.filename or "").lower()
+    content_type = (file.content_type or "").lower()
+
+    if not (filename.endswith(".csv") or content_type in ALLOWED_CSV_CONTENT_TYPES):
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Arquivo deve ser CSV (.csv)",
+        )
+
+    content = file.file.read(process_batch_service.MAX_BYTES + 1)
+    if len(content) > process_batch_service.MAX_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Arquivo excede o limite de {process_batch_service.MAX_BYTES} bytes",
+        )
+
+    try:
+        numbers = process_batch_service.parse_csv(content)
+    except ValueError as exc:
+        code = str(exc)
+        if code == "EMPTY_CSV":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="CSV vazio ou sem linhas úteis",
+            )
+        if code == "INVALID_ENCODING":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="CSV inválido: falha ao decodificar como UTF-8",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"CSV inválido: {code}",
+        )
+
+    job = process_batch_service.enqueue_job(
+        db,
+        company_id=company_id,
+        process_type=process_type,
+        process_numbers=numbers,
+        user=current_user,
+        background_tasks=background_tasks,
+    )
+
+    return BatchProcessJobAccepted(
+        job_id=job.id,
+        status=BatchJobStatusEnum(job.status.value),
+        total_rows=job.total_rows,
+        company_id=job.company_id,
+        process_type=ProcessTypeEnum(job.process_type.value),
+        created_at=job.created_at,
+        status_url=_build_status_url(job.id),
+        items_url=_build_items_url(job.id),
+    )
+
+
+@router.get(
+    "/batch-jobs/{job_id}",
+    response_model=BatchProcessJobResponse,
+)
+def get_batch_job(
+    job_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    job = crud_batch_job.get_job(db, job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job não encontrado",
+        )
+
+    access_control_service.validate_company_access(
+        db, current_user, job.company_id, "read_processes"
+    )
+
+    return BatchProcessJobResponse(
+        id=job.id,
+        company_id=job.company_id,
+        process_type=ProcessTypeEnum(job.process_type.value),
+        status=BatchJobStatusEnum(job.status.value),
+        total_rows=job.total_rows,
+        processed_rows=job.processed_rows,
+        created_count=job.created_count,
+        failed_count=job.failed_count,
+        error=job.error,
+        created_at=job.created_at,
+        started_at=job.started_at,
+        finished_at=job.finished_at,
+        created_by_user_id=job.created_by_user_id,
+        items_url=_build_items_url(job.id),
+    )
+
+
+@router.get(
+    "/batch-jobs/{job_id}/items",
+    response_model=BatchJobItemsPage,
+)
+def get_batch_job_items(
+    job_id: UUID,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    status_filter: Optional[Literal["pending", "created", "failed"]] = Query(
+        None, alias="status"
+    ),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    job = crud_batch_job.get_job(db, job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job não encontrado",
+        )
+
+    access_control_service.validate_company_access(
+        db, current_user, job.company_id, "read_processes"
+    )
+
+    item_status = _ITEM_STATUS_MAP.get(status_filter) if status_filter else None
+    items, total = crud_batch_job.list_items(
+        db, job_id, skip=skip, limit=limit, status_filter=item_status
+    )
+
+    payload_items: List[BatchProcessItemResult] = [
+        BatchProcessItemResult(
+            process_number=item.process_number,
+            status=_ITEM_STATUS_OUT[item.status],
+            process_id=item.process_id,
+            title=item.title,
+            error=item.error,
+            error_code=item.error_code,
+            row_index=item.row_index,
+        )
+        for item in items
+    ]
+
+    return BatchJobItemsPage(
+        job_id=job.id,
+        total=total,
+        skip=skip,
+        limit=limit,
+        items=payload_items,
+    )

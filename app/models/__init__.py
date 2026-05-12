@@ -11,3 +11,6 @@ from app.models.membership import (
     UserCompanyMembership, MembershipHistory, UserCompanyPermission,
     MembershipRole, MembershipPermission
 )
+from app.models.process_batch_job import (
+    ProcessBatchJob, ProcessBatchJobItem, BatchJobStatus, BatchJobItemStatus
+)

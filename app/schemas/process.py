@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, Dict
+from typing import Optional, Dict, List, Literal
 from datetime import datetime, date
 from enum import Enum
 from uuid import UUID
@@ -245,4 +245,73 @@ class ProcessUpdateFromMagazinesResponse(BaseModel):
                     }
                 }
             }
-        } 
+        }
+
+
+class BatchJobStatusEnum(str, Enum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    COMPLETED_WITH_ERRORS = "COMPLETED_WITH_ERRORS"
+    FAILED = "FAILED"
+
+
+class BatchJobItemStatusEnum(str, Enum):
+    PENDING = "PENDING"
+    CREATED = "CREATED"
+    FAILED = "FAILED"
+
+
+class BatchProcessItemResult(BaseModel):
+    process_number: str
+    status: Literal["pending", "created", "failed"]
+    process_id: Optional[UUID] = None
+    title: Optional[str] = None
+    error: Optional[str] = None
+    error_code: Optional[Literal[
+        "NOT_FOUND", "INPI_UNAVAILABLE", "DUPLICATE",
+        "VALIDATION", "NO_TITLE", "INTERNAL"
+    ]] = None
+    row_index: Optional[int] = None
+
+    class Config:
+        from_attributes = True
+
+
+class BatchProcessJobAccepted(BaseModel):
+    job_id: UUID
+    status: BatchJobStatusEnum
+    total_rows: int
+    company_id: UUID
+    process_type: ProcessTypeEnum
+    created_at: datetime
+    status_url: str
+    items_url: str
+
+
+class BatchProcessJobResponse(BaseModel):
+    id: UUID
+    company_id: UUID
+    process_type: ProcessTypeEnum
+    status: BatchJobStatusEnum
+    total_rows: int
+    processed_rows: int
+    created_count: int
+    failed_count: int
+    error: Optional[str] = None
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    created_by_user_id: UUID
+    items_url: str
+
+    class Config:
+        from_attributes = True
+
+
+class BatchJobItemsPage(BaseModel):
+    job_id: UUID
+    total: int
+    skip: int
+    limit: int
+    items: List[BatchProcessItemResult]
